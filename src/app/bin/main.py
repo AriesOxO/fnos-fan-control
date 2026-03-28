@@ -102,7 +102,7 @@ def main():
 
     # ── 8. 启动 HTTP 服务（主线程阻塞） ──
     try:
-        server = FanControlHTTPServer(bind_address, port, fc, cm)
+        server = FanControlHTTPServer(bind_address, port, fc, cm, hardware=hw)
         logger.info("风扇控制器已就绪")
         server.serve_forever()
     except KeyboardInterrupt:

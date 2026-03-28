@@ -173,10 +173,28 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
 .guide-section li b{color:var(--text)}
 .guide-code{margin-top:8px;padding:10px 14px;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;font-family:"SF Mono",Consolas,monospace;font-size:12px;color:var(--warn);word-break:break-all;user-select:all}
 
+/* ── 多区域面板 ── */
+.zone-panel{background:var(--card);border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid var(--border);box-shadow:var(--shadow)}
+.zone-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.zone-name{font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px}
+.zone-meta{font-size:11px;color:var(--text3)}
+.zone-stats{display:flex;gap:20px;margin-bottom:14px;flex-wrap:wrap}
+.zone-stat{text-align:center}
+.zone-stat .card-label{margin-bottom:2px}
+.zone-stat-val{font-size:20px;font-weight:800;letter-spacing:-.3px}
+.zone-stat-unit{font-size:12px;color:var(--text2);font-weight:400}
+.zone-mode-btns{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.zone-mode-btns .mode-btn{padding:10px 6px}
+.zone-mode-btns .mode-btn .m-icon{font-size:18px;margin-bottom:2px}
+.zone-mode-btns .mode-btn .name{font-size:12px}
+.zone-mode-btns .mode-btn .desc{display:none}
+.zone-degraded{font-size:12px;color:var(--warn);margin-top:8px;display:flex;align-items:center;gap:4px}
+
 /* ── 响应式 ── */
 @media(max-width:640px){
   .cards{grid-template-columns:repeat(2,1fr)}
   .mode-btns{grid-template-columns:repeat(2,1fr)}
+  .zone-mode-btns{grid-template-columns:repeat(2,1fr)}
   .curve-inputs{grid-template-columns:1fr}
   .container{padding:10px}
   .card-value{font-size:22px}
@@ -184,6 +202,7 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
 @media(max-width:380px){
   .cards{grid-template-columns:1fr}
   .mode-btns{grid-template-columns:repeat(2,1fr)}
+  .zone-mode-btns{grid-template-columns:repeat(2,1fr)}
 }
 </style>
 </head>
@@ -231,8 +250,11 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
     </div>
   </div>
 
-  <!-- 运行模式 -->
-  <div class="section">
+  <!-- 多区域面板容器（多区域时由 JS 动态填充） -->
+  <div id="zonesContainer"></div>
+
+  <!-- 运行模式（单区域时使用） -->
+  <div class="section" id="singleModeSection">
     <div class="section-title"><span class="s-icon">⚙</span> 运行模式</div>
     <div class="mode-btns" id="modeBtns">
       <button class="mode-btn active" data-mode="default" onclick="switchMode('default')">
@@ -379,7 +401,9 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
 
 <script>
 let config={},pollTimer=null,hwDetected=true,connected=true,currentTemp=null;
+let multiZone=false; // 多区域模式标记
 const DEFAULT_CURVE=[{temp:30,pwm_percent:20},{temp:40,pwm_percent:30},{temp:50,pwm_percent:45},{temp:60,pwm_percent:65},{temp:70,pwm_percent:85},{temp:80,pwm_percent:100}];
+const MODE_NAMES={default:'默认模式',auto:'自动模式',manual:'手动模式',full:'全速模式'};
 
 function showToast(msg,type='success'){
   const t=document.getElementById('toast');t.textContent=msg;
@@ -404,11 +428,95 @@ function startPolling(interval){
 
 async function fetchStatus(){
   const s=await api('status');if(!s)return;
-  updateStatusCards(s);updateModeUI(s.mode);updateAlerts(s);
-  // 日志面板展开时实时更新
+  updateStatusCards(s);updateAlerts(s);
+
+  const zones=s.zones||{};
+  const zoneCount=Object.keys(zones).length;
+
+  if(zoneCount>1){
+    // 多区域模式
+    if(!multiZone){multiZone=true;document.getElementById('singleModeSection').style.display='none';document.getElementById('curveSection').style.display='none'}
+    updateMultiZonePanels(zones);
+  }else{
+    // 单区域模式（原有 UI）
+    if(multiZone){multiZone=false;document.getElementById('singleModeSection').style.display='';document.getElementById('zonesContainer').innerHTML=''}
+    updateModeUI(s.mode);
+  }
+
   const logPanel=document.querySelector('.log-header .collapsible');
   if(logPanel&&logPanel.classList.contains('open')) fetchLogs();
 }
+
+// ── 多区域面板 ──────────────────────────────────────────
+
+function updateMultiZonePanels(zones){
+  const container=document.getElementById('zonesContainer');
+  for(const [zid,zs] of Object.entries(zones)){
+    let panel=document.getElementById('zone-'+zid);
+    if(!panel){panel=createZonePanel(zid,zs);container.appendChild(panel)}
+    updateZonePanel(zid,zs);
+  }
+  // 移除已不存在的区域面板
+  container.querySelectorAll('.zone-panel').forEach(p=>{
+    const id=p.id.replace('zone-','');
+    if(!zones[id])p.remove();
+  });
+}
+
+function createZonePanel(zid,zs){
+  const div=document.createElement('div');div.className='zone-panel';div.id='zone-'+zid;
+  const srcLabel={cpu:'CPU',disk:'硬盘',max:'最高值'};
+  div.innerHTML=`
+    <div class="zone-header">
+      <div class="zone-name"><span class="s-icon">🌀</span> ${zs.name||zid}</div>
+      <div class="zone-meta">${(zs.channels||[]).join(', ')} · 温度来源: ${srcLabel[zs.temp_source]||zs.temp_source}</div>
+    </div>
+    <div class="zone-stats">
+      <div class="zone-stat"><div class="card-label">温度</div><div class="zone-stat-val zone-temp">--<span class="zone-stat-unit">°C</span></div></div>
+      <div class="zone-stat"><div class="card-label">转速</div><div class="zone-stat-val zone-rpm">--<span class="zone-stat-unit"> RPM</span></div></div>
+      <div class="zone-stat"><div class="card-label">PWM</div><div class="zone-stat-val zone-pwm">--<span class="zone-stat-unit">%</span></div></div>
+    </div>
+    <div class="zone-mode-btns">
+      <button class="mode-btn" data-mode="default" onclick="switchZoneMode('${zid}','default')"><div class="m-icon">🔄</div><div class="name">默认</div></button>
+      <button class="mode-btn" data-mode="auto" onclick="switchZoneMode('${zid}','auto')"><div class="m-icon">📈</div><div class="name">自动</div></button>
+      <button class="mode-btn" data-mode="manual" onclick="switchZoneMode('${zid}','manual')"><div class="m-icon">🎚</div><div class="name">手动</div></button>
+      <button class="mode-btn" data-mode="full" onclick="switchZoneMode('${zid}','full')"><div class="m-icon">🚀</div><div class="name">全速</div></button>
+    </div>
+    <div class="zone-degraded" style="display:none"></div>`;
+  return div;
+}
+
+function updateZonePanel(zid,zs){
+  const panel=document.getElementById('zone-'+zid);if(!panel)return;
+  const tempEl=panel.querySelector('.zone-temp');
+  if(zs.temp!=null){tempEl.innerHTML=zs.temp.toFixed(1)+'<span class="zone-stat-unit">°C</span>';tempEl.className='zone-stat-val zone-temp '+tempColorClass(zs.temp)}
+  else tempEl.innerHTML='--<span class="zone-stat-unit">°C</span>';
+
+  const rpmEl=panel.querySelector('.zone-rpm');
+  if(zs.fan_rpm!=null){rpmEl.innerHTML=zs.fan_rpm+'<span class="zone-stat-unit"> RPM</span>';rpmEl.className='zone-stat-val zone-rpm'+(zs.fan_rpm===0?' fan-zero':'')}
+  else rpmEl.innerHTML='--<span class="zone-stat-unit"> RPM</span>';
+
+  const pwmEl=panel.querySelector('.zone-pwm');
+  if(zs.pwm_percent!=null)pwmEl.innerHTML=zs.pwm_percent+'<span class="zone-stat-unit">%</span>';
+  else pwmEl.innerHTML='--<span class="zone-stat-unit">%</span>';
+
+  panel.querySelectorAll('.mode-btn').forEach(b=>{
+    b.classList.toggle('active',b.dataset.mode===zs.mode);
+    if(b.dataset.mode!=='default')b.disabled=!hwDetected;
+  });
+
+  const degradedEl=panel.querySelector('.zone-degraded');
+  if(zs.degraded){degradedEl.style.display='flex';degradedEl.textContent='⚠ 已降级为默认模式'}
+  else degradedEl.style.display='none';
+}
+
+async function switchZoneMode(zid,mode){
+  const r=await api('zones/'+zid+'/mode','POST',{mode});
+  if(r&&r.ok){showToast('区域已切换到'+MODE_NAMES[mode]);fetchStatus()}
+  else showToast('切换失败','fail');
+}
+
+// ── 单区域 UI（原有逻辑）──────────────────────────────
 
 function updateStatusCards(s){
   const cpuEl=document.getElementById('cpuTemp'),cpuCard=document.getElementById('cardCpu');
@@ -438,24 +546,23 @@ function updateStatusCards(s){
   if(s.pwm_percent!=null){pwmEl.innerHTML=s.pwm_percent+'<span class="card-unit">%</span>';pwmBar.style.width=s.pwm_percent+'%'}
   else{pwmEl.innerHTML='--<span class="card-unit">%</span>';pwmBar.style.width='0'}
   hwDetected=s.hw_detected!==false;updateHwButtons();
-  if(document.getElementById('curveSection').style.display!=='none')drawCurve();
+  if(!multiZone&&document.getElementById('curveSection').style.display!=='none')drawCurve();
 }
 
 function tempColorClass(t){return t<50?'temp-safe':t<65?'temp-warn':'temp-danger'}
 
 function updateModeUI(mode){
-  document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
+  document.querySelectorAll('#singleModeSection .mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
   document.getElementById('manualPanel').style.display=mode==='manual'?'':'none';
   document.getElementById('fullPanel').style.display=mode==='full'?'':'none';
   document.getElementById('curveSection').style.display=mode==='auto'?'':'none';
 }
 
-function updateHwButtons(){document.querySelectorAll('.mode-btn').forEach(b=>{if(b.dataset.mode!=='default')b.disabled=!hwDetected})}
+function updateHwButtons(){document.querySelectorAll('#singleModeSection .mode-btn').forEach(b=>{if(b.dataset.mode!=='default')b.disabled=!hwDetected})}
 
 async function switchMode(mode){
-  const names={default:'默认模式',auto:'自动模式',manual:'手动模式',full:'全速模式'};
   const r=await api('mode','POST',{mode});
-  if(r&&r.ok){showToast('已切换到'+names[mode]);fetchStatus()}else showToast('切换失败','fail');
+  if(r&&r.ok){showToast('已切换到'+MODE_NAMES[mode]);fetchStatus()}else showToast('切换失败','fail');
 }
 
 document.getElementById('manualSlider').addEventListener('input',function(){document.getElementById('manualVal').textContent=this.value+'%'});
@@ -522,7 +629,7 @@ async function generateCurve(){
   const temp_min=parseInt(document.getElementById('genTempMin').value);
   const temp_max=parseInt(document.getElementById('genTempMax').value);
   const r=await api('curve/generate','POST',{count,temp_min,temp_max,pwm_min:config.min_pwm_percent||20,pwm_max:100});
-  if(r&&r.ok&&r.curve){curveData=r.curve;renderCurveInputs();showToast(`已生成 ${count} 节点曲线`)}
+  if(r&&r.ok&&r.curve){curveData=r.curve;renderCurveInputs();showToast('已生成 '+count+' 节点曲线')}
   else showToast('生成失败','fail');
 }
 
@@ -550,8 +657,9 @@ function resetSettings(){document.getElementById('pollInterval').value=2;documen
 function loadConfig(cfg){
   config=cfg;
   document.getElementById('pollInterval').value=cfg.poll_interval||2;
-  document.getElementById('minPwm').value=cfg.min_pwm_percent||25;
-  const src=cfg.temp_source||'cpu';const radio=document.querySelector(`input[name=tempSource][value=${src}]`);if(radio)radio.checked=true;
+  // v1 扁平格式的字段
+  if(cfg.min_pwm_percent!=null)document.getElementById('minPwm').value=cfg.min_pwm_percent;
+  const src=cfg.temp_source||'cpu';const radio=document.querySelector('input[name=tempSource][value='+src+']');if(radio)radio.checked=true;
   document.getElementById('manualSlider').value=cfg.manual_pwm_percent||50;
   document.getElementById('manualSlider').min=Math.max(10,cfg.min_pwm_percent||10);
   document.getElementById('manualVal').textContent=(cfg.manual_pwm_percent||50)+'%';
@@ -562,7 +670,7 @@ function updateAlerts(s){
   const bar=document.getElementById('alertBar'),icon=document.querySelector('.alert-icon'),txt=document.getElementById('alertText');
   const badge=document.getElementById('statusBadge'),dot=document.getElementById('statusDot'),stxt=document.getElementById('statusText');
   if(s.degraded){bar.className='alert warn';icon.textContent='⚠';txt.textContent='已恢复系统默认温控（原因：'+(s.degrade_reason||'未知')+'）';badge.className='status-badge warn';dot.className='pulse warn';stxt.textContent='降级模式'}
-  else if(!s.hw_detected){bar.className='alert warn';icon.textContent='⚠';txt.textContent='IT8772 传感器未探测到，仅提供温度监控';badge.className='status-badge warn';dot.className='pulse warn';stxt.textContent='仅监控'}
+  else if(!s.hw_detected){bar.className='alert warn';icon.textContent='⚠';txt.textContent='PWM 控制芯片未探测到，仅提供温度监控';badge.className='status-badge warn';dot.className='pulse warn';stxt.textContent='仅监控'}
   else{bar.className='alert';badge.className='status-badge ok';dot.className='pulse ok';stxt.textContent='运行中'}
 }
 
@@ -578,7 +686,7 @@ function updateLogs(logs){
   logs.slice().reverse().forEach(l=>{
     const div=document.createElement('div');div.className='log-item';
     const level=l.level||'info';
-    div.innerHTML=`<span class="log-time">${l.time||''}</span><span class="log-badge ${level}">${level}</span><span class="log-msg">${l.message||''}</span>`;
+    div.innerHTML='<span class="log-time">'+(l.time||'')+'</span><span class="log-badge '+level+'">'+level+'</span><span class="log-msg">'+(l.message||'')+'</span>';
     body.appendChild(div);
   });
 }
@@ -590,7 +698,6 @@ async function clearLogs(){
 
 function toggleCollapse(el){
   el.classList.toggle('open');
-  // 找到对应的 collapse-body：可能是兄弟节点，也可能是父节点的兄弟
   let body=el.nextElementSibling;
   if(!body||!body.classList.contains('collapse-body')){
     body=el.parentElement.nextElementSibling;
@@ -598,7 +705,6 @@ function toggleCollapse(el){
   if(body&&body.classList.contains('collapse-body')){
     body.classList.toggle('open');
   }
-  // 日志面板展开时立即拉取
   if(el.classList.contains('open')&&el.closest('.log-header')){
     fetchLogs();
   }

@@ -1,15 +1,9 @@
 #!/bin/bash
 # 卸载前执行：恢复硬件安全状态 + 清理 nginx 反代
 
-# 恢复所有 IT8772 PWM 通道为自动模式
-for hwmon_dir in /sys/class/hwmon/hwmon*; do
-    if [ "$(cat "$hwmon_dir/name" 2>/dev/null)" = "it8772" ]; then
-        for pwm_enable in "$hwmon_dir"/pwm*_enable; do
-            if [ -f "$pwm_enable" ]; then
-                echo 2 > "$pwm_enable" 2>/dev/null
-            fi
-        done
-    fi
+# 恢复所有 PWM 通道为安全状态（通用，不匹配芯片型号）
+for pwm_enable in /sys/class/hwmon/hwmon*/pwm*_enable; do
+    [ -w "$pwm_enable" ] && echo 2 > "$pwm_enable" 2>/dev/null
 done
 
 # 清理 nginx 反代配置

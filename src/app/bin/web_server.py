@@ -2,12 +2,17 @@
 Web 服务 — 基于 http.server 的 REST API
 
 端点：
-  GET  /            → index.html
-  GET  /api/status  → 实时状态
-  GET  /api/config  → 当前配置
-  POST /api/config  → 更新配置
-  POST /api/mode    → 切换模式
-  GET  /api/logs    → 运行日志
+  GET  /                        → index.html
+  GET  /api/status              → 实时状态
+  GET  /api/config              → 当前配置
+  GET  /api/hardware            → 硬件探测结果
+  GET  /api/logs                → 运行日志
+  POST /api/config              → 更新配置
+  POST /api/mode                → 切换模式（可指定区域）
+  POST /api/logs/clear          → 清空日志
+  POST /api/curve/generate      → 自动生成温控曲线
+  POST /api/zones/{id}/mode     → 切换指定区域模式
+  POST /api/zones/{id}/config   → 更新指定区域配置
 """
 
 import json
@@ -60,6 +65,8 @@ class FanControlHandler(BaseHTTPRequestHandler):
                 self._json_response(self.server.fan_controller.get_status())
             elif self.path == "/api/config":
                 self._json_response(self.server.config_manager.get())
+            elif self.path == "/api/hardware":
+                self._json_response(self.server.hardware.get_hardware_info())
             elif self.path == "/api/logs":
                 self._json_response(self.server.fan_controller.get_logs())
             else:
@@ -100,6 +107,12 @@ class FanControlHandler(BaseHTTPRequestHandler):
                 self._json_response({"ok": True, "message": "日志已清空"})
             elif self.path == "/api/curve/generate":
                 self._handle_curve_generate(data)
+            elif self.path.startswith("/api/zones/") and self.path.endswith("/mode"):
+                zone_id = self.path.split("/")[3]
+                self._handle_zone_mode_switch(zone_id, data)
+            elif self.path.startswith("/api/zones/") and self.path.endswith("/config"):
+                zone_id = self.path.split("/")[3]
+                self._handle_zone_config_update(zone_id, data)
             else:
                 self._error_response(404, "Not Found")
 
@@ -114,24 +127,52 @@ class FanControlHandler(BaseHTTPRequestHandler):
         data.pop("web_port", None)
 
         updated = self.server.config_manager.update(data)
-        # 记录配置变更日志
         changed = [k for k in data if k not in ("mode", "web_port")]
         if changed:
             self.server.fan_controller._add_log("info", "配置更新: " + ", ".join(changed))
         self._json_response({"ok": True, "config": updated})
 
     def _handle_mode_switch(self, data: dict):
-        """处理模式切换请求"""
+        """处理模式切换请求（支持可选 zone_id）"""
         mode = data.get("mode")
         if not isinstance(mode, str):
             self._error_response(400, "Missing or invalid 'mode' field")
             return
 
-        ok = self.server.fan_controller.set_mode(mode)
+        zone_id = data.get("zone_id")
+        ok = self.server.fan_controller.set_mode(mode, zone_id=zone_id)
         if ok:
             self._json_response({"ok": True, "mode": mode})
         else:
             self._error_response(400, "Invalid mode or hardware not detected")
+
+    def _handle_zone_mode_switch(self, zone_id: str, data: dict):
+        """处理区域模式切换"""
+        mode = data.get("mode")
+        if not isinstance(mode, str):
+            self._error_response(400, "Missing or invalid 'mode' field")
+            return
+
+        ok = self.server.fan_controller.set_mode(mode, zone_id=zone_id)
+        if ok:
+            self._json_response({"ok": True, "zone_id": zone_id, "mode": mode})
+        else:
+            self._error_response(400, "Invalid mode or zone not found")
+
+    def _handle_zone_config_update(self, zone_id: str, data: dict):
+        """处理区域配置更新"""
+        data.pop("id", None)
+        data.pop("channels", None)
+        data.pop("mode", None)
+
+        result = self.server.config_manager.update_zone(zone_id, data)
+        if result is not None:
+            self.server.fan_controller._add_log(
+                "info", "区域 {} 配置更新: {}".format(zone_id, ", ".join(data.keys()))
+            )
+            self._json_response({"ok": True, "zone": result})
+        else:
+            self._error_response(404, "Zone '{}' not found".format(zone_id))
 
     def _handle_curve_generate(self, data: dict):
         """自动生成温控曲线节点"""
@@ -149,7 +190,6 @@ class FanControlHandler(BaseHTTPRequestHandler):
         for i in range(count):
             ratio = i / (count - 1) if count > 1 else 1
             temp = round(temp_min + (temp_max - temp_min) * ratio)
-            # 使用二次曲线使低温区更平缓、高温区更陡峭
             pwm_ratio = ratio ** 1.3
             pwm = round(pwm_min + (pwm_max - pwm_min) * pwm_ratio)
             curve.append({"temp": temp, "pwm_percent": max(10, min(100, pwm))})
@@ -187,10 +227,11 @@ class FanControlHandler(BaseHTTPRequestHandler):
 
 
 class FanControlHTTPServer(HTTPServer):
-    """扩展 HTTPServer，持有 fan_controller 和 config_manager 引用"""
+    """扩展 HTTPServer，持有 fan_controller、config_manager 和 hardware 引用"""
 
-    def __init__(self, bind_address: str, port: int, fan_controller, config_manager):
+    def __init__(self, bind_address: str, port: int, fan_controller, config_manager, hardware=None):
         self.fan_controller = fan_controller
         self.config_manager = config_manager
+        self.hardware = hardware
         super().__init__((bind_address, port), FanControlHandler)
         logger.info("Web 服务启动: http://%s:%d", bind_address, port)

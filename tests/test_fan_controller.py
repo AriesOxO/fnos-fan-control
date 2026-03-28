@@ -1,5 +1,6 @@
 """风扇控制核心单元测试（Mock 硬件）"""
 
+import json
 import os
 import sys
 import tempfile
@@ -8,10 +9,9 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "app", "bin"))
 
-from hardware import Hardware
-from config_manager import ConfigManager
+from hardware import Hardware, safe_pwm_value
+from config_manager import ConfigManager, DEFAULT_SAFE_CURVE
 from fan_controller import FanController
-from config_manager import DEFAULT_SAFE_CURVE
 
 
 class MockHardware(Hardware):
@@ -24,7 +24,15 @@ class MockHardware(Hardware):
         self._mock_enable = 1
         self._mock_rpm = 2500
         self._mock_disk_temps = {}
-        self.it8772_base = "/mock/hwmon"
+
+        # 模拟芯片探测结果
+        self.chips = [{
+            "name": "mock",
+            "display_name": "Mock Chip",
+            "hwmon_path": "/mock/hwmon",
+            "pwm_channels": ["pwm1", "pwm2"],
+            "fan_inputs": {"pwm2": "/mock/fan2"},
+        }]
         self.coretemp_base = "/mock/coretemp"
         self.available_pwm = ["pwm1", "pwm2"]
         self.available_fans = {"pwm2": "/mock/fan2"}
@@ -51,7 +59,6 @@ class MockHardware(Hardware):
         return self._mock_enable
 
     def write_pwm(self, value, channel="pwm2", min_percent=25):
-        from hardware import safe_pwm_value
         self._mock_pwm = safe_pwm_value(value, min_percent)
         self._write_history.append(("pwm", self._mock_pwm))
         return True
@@ -133,7 +140,7 @@ class TestFanControllerModes(unittest.TestCase):
     def test_switch_to_auto(self):
         fc = self._make_controller()
         self.assertTrue(fc.set_mode("auto"))
-        time.sleep(0.5)  # 等待控制线程更新状态
+        time.sleep(0.5)
         status = fc.get_status()
         self.assertEqual(status["mode"], "auto")
         self.assertEqual(self.hw._mock_enable, 1)
@@ -161,7 +168,6 @@ class TestFanControllerModes(unittest.TestCase):
         fc.set_mode("auto")
         self.assertEqual(self.hw._mock_enable, 1)
         fc.set_mode("default")
-        # 默认模式也是 pwm_enable=1（芯片自动=全速不可用）
         self.assertEqual(self.hw._mock_enable, 1)
         self._stop(fc)
 
@@ -172,7 +178,7 @@ class TestFanControllerModes(unittest.TestCase):
         self._stop(fc)
 
     def test_no_hw_rejects_non_default(self):
-        self.hw.it8772_base = None
+        self.hw.chips = []
         fc = self._make_controller()
         self.assertFalse(fc.set_mode("auto"))
         self.assertEqual(fc.get_status()["mode"], "default")
@@ -180,12 +186,10 @@ class TestFanControllerModes(unittest.TestCase):
 
     def test_mode_switch_clears_degraded(self):
         fc = self._make_controller()
-        fc._degraded = True
-        fc._degrade_reason = "test"
+        fc._degraded_zones.add("default")
         fc.set_mode("auto")
         status = fc.get_status()
         self.assertFalse(status["degraded"])
-        self.assertEqual(status["degrade_reason"], "")
         self._stop(fc)
 
 
@@ -212,13 +216,12 @@ class TestFanControllerSafety(unittest.TestCase):
         time.sleep(0.5)
         fc.set_mode("auto")
         time.sleep(0.3)
-        fc._degrade("test reason")
-        # 验证内部状态（_degrade 是同步的）
-        self.assertEqual(fc._mode, "default")
-        self.assertTrue(fc._degraded)
-        self.assertEqual(fc._degrade_reason, "test reason")
-        # 降级后仍然 pwm_enable=1，靠保守曲线控制
-        self.assertEqual(self.hw._mock_enable, 1)
+        # 模拟降级
+        zone = {"id": "default", "name": "系统风扇", "channels": ["pwm2"],
+                "temp_source": "cpu", "mode": "auto"}
+        fc._degrade_zone(zone, "test reason")
+        self.assertIn("default", fc._degraded_zones)
+        self.assertEqual(self.hw._mock_enable, 1)  # 保持手动模式，靠保守曲线
         fc.stop()
 
 
@@ -262,10 +265,118 @@ class TestFanControllerLogs(unittest.TestCase):
         fc = FanController(self.hw, self.cm)
         fc.start()
         time.sleep(0.3)
-        fc._degrade("test error")
+        zone = {"id": "default", "name": "系统风扇", "channels": ["pwm2"],
+                "temp_source": "cpu", "mode": "auto"}
+        fc._degrade_zone(zone, "test error")
         logs = fc.get_logs()
         error_logs = [l for l in logs if l.get("level") == "error"]
         self.assertGreater(len(error_logs), 0)
+        fc.stop()
+
+
+class TestFanControllerStatus(unittest.TestCase):
+    """状态输出测试"""
+
+    def setUp(self):
+        self.hw = MockHardware()
+        self.tmpdir = tempfile.mkdtemp()
+        self.cm = ConfigManager(self.tmpdir, available_pwm=["pwm1", "pwm2"])
+        self.cm.load()
+
+    def test_status_has_zones(self):
+        fc = FanController(self.hw, self.cm)
+        fc.start()
+        time.sleep(0.5)
+        status = fc.get_status()
+        self.assertIn("zones", status)
+        self.assertIn("hw_detected", status)
+        self.assertTrue(status["hw_detected"])
+        fc.stop()
+
+    def test_status_backward_compatible(self):
+        """单区域时顶层字段应保持兼容"""
+        fc = FanController(self.hw, self.cm)
+        fc.start()
+        time.sleep(0.5)
+        status = fc.get_status()
+        # 顶层仍有这些字段
+        self.assertIn("cpu_temp", status)
+        self.assertIn("fan_rpm", status)
+        self.assertIn("pwm_percent", status)
+        self.assertIn("mode", status)
+        self.assertIn("degraded", status)
+        fc.stop()
+
+
+class TestMultiZoneControl(unittest.TestCase):
+    """多区域控制测试"""
+
+    def setUp(self):
+        self.hw = MockHardware()
+        self.tmpdir = tempfile.mkdtemp()
+        config = {
+            "poll_interval": 2,
+            "web_port": 9511,
+            "zones": [
+                {
+                    "id": "cpu", "name": "CPU 风扇",
+                    "channels": ["pwm1"], "temp_source": "cpu",
+                    "mode": "auto", "min_pwm_percent": 20,
+                    "manual_pwm_percent": 50,
+                    "curve": [{"temp": 30, "pwm_percent": 20}, {"temp": 80, "pwm_percent": 100}],
+                },
+                {
+                    "id": "hdd", "name": "硬盘风扇",
+                    "channels": ["pwm2"], "temp_source": "disk",
+                    "mode": "manual", "min_pwm_percent": 25,
+                    "manual_pwm_percent": 40,
+                    "curve": [{"temp": 30, "pwm_percent": 25}, {"temp": 60, "pwm_percent": 100}],
+                },
+            ],
+        }
+        with open(os.path.join(self.tmpdir, "config.json"), "w") as f:
+            json.dump(config, f)
+        self.cm = ConfigManager(self.tmpdir, available_pwm=["pwm1", "pwm2"])
+        self.cm.load()
+
+    def test_multi_zone_status(self):
+        fc = FanController(self.hw, self.cm)
+        fc.start()
+        time.sleep(1)
+        status = fc.get_status()
+        self.assertIn("zones", status)
+        self.assertIn("cpu", status["zones"])
+        self.assertIn("hdd", status["zones"])
+        fc.stop()
+
+    def test_switch_single_zone_mode(self):
+        fc = FanController(self.hw, self.cm)
+        fc.start()
+        time.sleep(0.5)
+        self.assertTrue(fc.set_mode("full", zone_id="cpu"))
+        time.sleep(0.5)
+        status = fc.get_status()
+        self.assertEqual(status["zones"]["cpu"]["mode"], "full")
+        # hdd 区域不受影响
+        self.assertEqual(status["zones"]["hdd"]["mode"], "manual")
+        fc.stop()
+
+    def test_switch_all_zones_mode(self):
+        fc = FanController(self.hw, self.cm)
+        fc.start()
+        time.sleep(0.5)
+        self.assertTrue(fc.set_mode("default"))
+        time.sleep(0.5)
+        status = fc.get_status()
+        self.assertEqual(status["zones"]["cpu"]["mode"], "default")
+        self.assertEqual(status["zones"]["hdd"]["mode"], "default")
+        fc.stop()
+
+    def test_invalid_zone_id(self):
+        fc = FanController(self.hw, self.cm)
+        fc.start()
+        time.sleep(0.3)
+        self.assertFalse(fc.set_mode("auto", zone_id="nonexistent"))
         fc.stop()
 
 

@@ -1,6 +1,10 @@
 """
 配置管理 — 加载、校验、保存、线程安全读写
 
+支持两种配置格式：
+- v1 扁平格式（无 zones 字段）：向后兼容，运行时自动包装为单区域
+- v2 zones 格式：多区域独立配置
+
 配置文件路径：$TRIM_PKGETC/config.json
 """
 
@@ -43,14 +47,16 @@ DEFAULT_SAFE_CURVE = [
     {"temp": 80, "pwm_percent": 100},
 ]
 
-# 绝对下限���分比，与 hardware.py 的 ABSOLUTE_MIN_PWM 对应
+# 绝对下限百分比，与 hardware.py 的 ABSOLUTE_MIN_PWM 对应
 ABSOLUTE_MIN_PERCENT = 10
 
+
+# ── 字段校验函数 ─────────────────────────────────────────
 
 def _validate_mode(value) -> str:
     if isinstance(value, str) and value in VALID_MODES:
         return value
-    logger.warning("mode 校验失败: %r，回���默认值", value)
+    logger.warning("mode 校验失败: %r，回退默认值", value)
     return DEFAULT_CONFIG["mode"]
 
 
@@ -121,46 +127,170 @@ def _validate_fan_channel(value, available_pwm: list[str] | None = None) -> str:
     return DEFAULT_CONFIG["fan_channel"]
 
 
-def validate_config(raw: dict, available_pwm: list[str] | None = None) -> dict:
-    """逐字段校验配置，无效字段回退默认值"""
+# ── 区域校验 ─────────────────────────────────────────────
+
+def _validate_zone(zone: dict, available_pwm: list[str] | None = None) -> dict | None:
+    """校验单个风扇区域配置，返回校验后的 zone 或 None（跳过）"""
+    if not isinstance(zone, dict):
+        logger.warning("zone 格式错误，跳过")
+        return None
+
+    zone_id = zone.get("id")
+    if not isinstance(zone_id, str) or not zone_id.strip():
+        zone_id = "zone_{}".format(id(zone))
+
+    # channels：至少 1 个，须匹配已探测通道
+    channels = zone.get("channels", [])
+    if not isinstance(channels, list) or len(channels) == 0:
+        logger.warning("zone '%s' 无 channels，跳过", zone_id)
+        return None
+
+    if available_pwm is not None:
+        valid_channels = [ch for ch in channels if ch in available_pwm]
+        if not valid_channels:
+            logger.warning("zone '%s' 所有 channels 无效，跳过", zone_id)
+            return None
+        channels = valid_channels
+
+    name = zone.get("name")
+    if not isinstance(name, str) or not name.strip():
+        name = "风扇区域"
+
     return {
-        "mode": _validate_mode(raw.get("mode")),
+        "id": zone_id,
+        "name": name,
+        "channels": channels,
+        "temp_source": _validate_temp_source(zone.get("temp_source")),
+        "mode": _validate_mode(zone.get("mode")),
+        "min_pwm_percent": _validate_int_range(
+            zone.get("min_pwm_percent"), ABSOLUTE_MIN_PERCENT, 100,
+            DEFAULT_CONFIG["min_pwm_percent"], "min_pwm_percent",
+        ),
+        "manual_pwm_percent": _validate_int_range(
+            zone.get("manual_pwm_percent"), ABSOLUTE_MIN_PERCENT, 100,
+            DEFAULT_CONFIG["manual_pwm_percent"], "manual_pwm_percent",
+        ),
+        "curve": _validate_curve(zone.get("curve", DEFAULT_CONFIG["curve"])),
+    }
+
+
+def _validate_zones(zones: list, available_pwm: list[str] | None = None) -> list[dict]:
+    """校验 zones 列表，过滤无效区域，检测通道冲突"""
+    if not isinstance(zones, list):
+        return []
+
+    validated = []
+    claimed_channels = set()
+
+    for raw_zone in zones:
+        zone = _validate_zone(raw_zone, available_pwm)
+        if zone is None:
+            continue
+
+        conflict = set(zone["channels"]) & claimed_channels
+        if conflict:
+            logger.warning("zone '%s' 的通道 %s 已被占用，跳过", zone["id"], conflict)
+            continue
+
+        claimed_channels.update(zone["channels"])
+        validated.append(zone)
+
+    return validated
+
+
+def _make_default_zone(available_pwm: list[str] | None = None) -> dict:
+    """创建默认单区域配置"""
+    channel = "pwm2"
+    if available_pwm and "pwm2" not in available_pwm:
+        channel = available_pwm[0] if available_pwm else "pwm2"
+    return {
+        "id": "default",
+        "name": "系统风扇",
+        "channels": [channel],
+        "temp_source": DEFAULT_CONFIG["temp_source"],
+        "mode": DEFAULT_CONFIG["mode"],
+        "min_pwm_percent": DEFAULT_CONFIG["min_pwm_percent"],
+        "manual_pwm_percent": DEFAULT_CONFIG["manual_pwm_percent"],
+        "curve": copy.deepcopy(DEFAULT_CONFIG["curve"]),
+    }
+
+
+# ── 配置校验 ─────────────────────────────────────────────
+
+def validate_config(raw: dict, available_pwm: list[str] | None = None) -> dict:
+    """逐字段校验配置
+
+    支持两种格式：
+    - v1 扁平格式（无 zones）：保留所有原有字段
+    - v2 zones 格式：全局字段 + zones 列表
+    """
+    result = {
         "poll_interval": _validate_int_range(
             raw.get("poll_interval"), 1, 30, DEFAULT_CONFIG["poll_interval"], "poll_interval"
         ),
-        "min_pwm_percent": _validate_int_range(
-            raw.get("min_pwm_percent"), ABSOLUTE_MIN_PERCENT, 100,
-            DEFAULT_CONFIG["min_pwm_percent"], "min_pwm_percent"
-        ),
-        "temp_source": _validate_temp_source(raw.get("temp_source")),
-        "manual_pwm_percent": _validate_int_range(
-            raw.get("manual_pwm_percent"), ABSOLUTE_MIN_PERCENT, 100,
-            DEFAULT_CONFIG["manual_pwm_percent"], "manual_pwm_percent"
-        ),
-        "curve": _validate_curve(raw.get("curve", DEFAULT_CONFIG["curve"])),
-        "fan_channel": _validate_fan_channel(raw.get("fan_channel"), available_pwm),
         "web_port": _validate_int_range(
             raw.get("web_port"), 1024, 65535, DEFAULT_CONFIG["web_port"], "web_port"
         ),
     }
 
+    if "zones" in raw:
+        result["zones"] = _validate_zones(raw["zones"], available_pwm)
+        if not result["zones"]:
+            logger.warning("所有 zones 校验失败，回退为默认配置")
+            result["zones"] = [_make_default_zone(available_pwm)]
+    else:
+        # v1 扁平格式：保留原有字段
+        result["mode"] = _validate_mode(raw.get("mode"))
+        result["min_pwm_percent"] = _validate_int_range(
+            raw.get("min_pwm_percent"), ABSOLUTE_MIN_PERCENT, 100,
+            DEFAULT_CONFIG["min_pwm_percent"], "min_pwm_percent"
+        )
+        result["temp_source"] = _validate_temp_source(raw.get("temp_source"))
+        result["manual_pwm_percent"] = _validate_int_range(
+            raw.get("manual_pwm_percent"), ABSOLUTE_MIN_PERCENT, 100,
+            DEFAULT_CONFIG["manual_pwm_percent"], "manual_pwm_percent"
+        )
+        result["curve"] = _validate_curve(raw.get("curve", DEFAULT_CONFIG["curve"]))
+        result["fan_channel"] = _validate_fan_channel(raw.get("fan_channel"), available_pwm)
+
+    return result
+
+
+def normalize_config(config: dict) -> dict:
+    """统一为带 zones 的内部格式（运行时调用，不改文件）
+
+    v1 扁平配置 → 包装为单区域
+    v2 zones 配置 → 原样返回
+    """
+    if "zones" in config:
+        return config
+
+    zone = {
+        "id": "default",
+        "name": "系统风扇",
+        "channels": [config.get("fan_channel", "pwm2")],
+        "temp_source": config.get("temp_source", "cpu"),
+        "mode": config.get("mode", "default"),
+        "min_pwm_percent": config.get("min_pwm_percent", 20),
+        "manual_pwm_percent": config.get("manual_pwm_percent", 50),
+        "curve": config.get("curve", copy.deepcopy(DEFAULT_CONFIG["curve"])),
+    }
+    return {**config, "zones": [zone]}
+
+
+# ── ConfigManager ────────────────────────────────────────
 
 class ConfigManager:
     """线程安全的配置管理器"""
 
     def __init__(self, config_dir: str, available_pwm: list[str] | None = None):
-        """
-        Args:
-            config_dir: 配置文件所在目录（对应 $TRIM_PKGETC）
-            available_pwm: 已探测到的可用 PWM 通道列表
-        """
         self._config_path = os.path.join(config_dir, "config.json")
         self._available_pwm = available_pwm
         self._lock = threading.Lock()
         self._config: dict = copy.deepcopy(DEFAULT_CONFIG)
 
     def load(self) -> dict:
-        """从文件加载配置，校验后返回。加载失败使用默认配���。"""
+        """从文件加载配置，校验后返回。加载失败使用默认配置。"""
         with self._lock:
             try:
                 with open(self._config_path, "r") as f:
@@ -179,7 +309,7 @@ class ConfigManager:
             return copy.deepcopy(self._config)
 
     def save(self) -> bool:
-        """将当前配置保存到文件。失败��影响运行。"""
+        """将当前配置保存到文件。"""
         with self._lock:
             try:
                 os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
@@ -210,3 +340,51 @@ class ConfigManager:
 
         self.save()
         return self.get()
+
+    def update_zone(self, zone_id: str, partial: dict) -> dict | None:
+        """更新指定区域的配置
+
+        Args:
+            zone_id: 区域 ID
+            partial: 要更新的字段子集
+
+        Returns:
+            更新后的区域配置，区域不存在返回 None
+        """
+        with self._lock:
+            normalized = normalize_config(self._config)
+            zones = normalized.get("zones", [])
+
+            target_idx = None
+            for i, z in enumerate(zones):
+                if z["id"] == zone_id:
+                    target_idx = i
+                    break
+
+            if target_idx is None:
+                return None
+
+            target = zones[target_idx]
+            merged = {**target, **partial}
+            merged["id"] = target["id"]
+            merged["channels"] = target["channels"]
+            validated = _validate_zone(merged, self._available_pwm)
+
+            if validated is None:
+                return None
+
+            zones[target_idx] = validated
+
+            # 写回配置
+            if "zones" not in self._config:
+                # 首次从 v1 升级到 v2
+                self._config = {
+                    "poll_interval": self._config.get("poll_interval", 2),
+                    "web_port": self._config.get("web_port", 9511),
+                    "zones": zones,
+                }
+            else:
+                self._config["zones"] = zones
+
+        self.save()
+        return copy.deepcopy(validated)

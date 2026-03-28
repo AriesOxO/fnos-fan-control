@@ -22,20 +22,19 @@ log_msg() {
 
 # ── 核心安全函数 ─────────────────────────────────────────
 restore_safe_state() {
-    # 恢复所有 IT8772 PWM 通道为自动模式 (pwm_enable=2)
-    # 独立于 Python 进程，纯 bash 实现
-    for hwmon_dir in /sys/class/hwmon/hwmon*; do
-        if [ "$(cat "$hwmon_dir/name" 2>/dev/null)" = "it8772" ]; then
-            for pwm_enable in "$hwmon_dir"/pwm*_enable; do
-                if [ -f "$pwm_enable" ]; then
-                    echo 2 > "$pwm_enable" 2>/dev/null
-                fi
-            done
-            log_msg "restore_safe_state: 已恢复 $hwmon_dir 所有 PWM 通道为自动模式"
-            return 0
+    # 恢复所有 PWM 通道为安全状态 (pwm_enable=2)
+    # 通用逻辑：不匹配芯片型号，任何可写的 pwm_enable 都恢复
+    local restored=0
+    for pwm_enable in /sys/class/hwmon/hwmon*/pwm*_enable; do
+        if [ -w "$pwm_enable" ]; then
+            echo 2 > "$pwm_enable" 2>/dev/null && restored=1
         fi
     done
-    log_msg "restore_safe_state: 未找到 IT8772 芯片"
+    if [ "$restored" -eq 1 ]; then
+        log_msg "restore_safe_state: 已恢复所有 PWM 通道"
+        return 0
+    fi
+    log_msg "restore_safe_state: 未找到可写的 PWM 通道"
     return 1
 }
 
