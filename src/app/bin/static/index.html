@@ -236,7 +236,7 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
     <div class="section-title"><span class="s-icon">⚙</span> 运行模式</div>
     <div class="mode-btns" id="modeBtns">
       <button class="mode-btn active" data-mode="default" onclick="switchMode('default')">
-        <div class="m-icon">🔄</div><div class="name">默认模式</div><div class="desc">芯片自主温控</div>
+        <div class="m-icon">🔄</div><div class="name">默认模式</div><div class="desc">保守温控曲线</div>
       </button>
       <button class="mode-btn" data-mode="auto" onclick="switchMode('auto')">
         <div class="m-icon">📈</div><div class="name">自动模式</div><div class="desc">自定义曲线</div>
@@ -338,7 +338,7 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
         <div class="guide-section">
           <h3>运行模式</h3>
           <ul>
-            <li><b>默认模式</b> — 不干预风扇，由主板 IT8772 芯片自主温控。安装后默认选择此模式，最安全。</li>
+            <li><b>默认模式</b> — 使用内置保守温控曲线，安装后默认选择此模式，最安全。低温安静、高温积极散热。</li>
             <li><b>自动模式</b> — 根据自定义温控曲线自动调节转速。温度越高转速越快，支持最多 10 个节点精细控制。</li>
             <li><b>手动模式</b> — 固定转速运行。通过滑块设置 PWM 百分比，适合调试或特殊场景。</li>
             <li><b>全速模式</b> — 风扇 100% 全速运转。用于紧急散热，噪音较大。</li>

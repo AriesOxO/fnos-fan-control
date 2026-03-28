@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "app", "
 from hardware import Hardware
 from config_manager import ConfigManager
 from fan_controller import FanController
+from config_manager import DEFAULT_SAFE_CURVE
 
 
 class MockHardware(Hardware):
@@ -20,7 +21,7 @@ class MockHardware(Hardware):
         super().__init__()
         self._mock_temp = 50.0
         self._mock_pwm = 128
-        self._mock_enable = 2
+        self._mock_enable = 1
         self._mock_rpm = 2500
         self._mock_disk_temps = {}
         self.it8772_base = "/mock/hwmon"
@@ -160,7 +161,8 @@ class TestFanControllerModes(unittest.TestCase):
         fc.set_mode("auto")
         self.assertEqual(self.hw._mock_enable, 1)
         fc.set_mode("default")
-        self.assertEqual(self.hw._mock_enable, 2)
+        # 默认模式也是 pwm_enable=1（芯片自动=全速不可用）
+        self.assertEqual(self.hw._mock_enable, 1)
         self._stop(fc)
 
     def test_invalid_mode_rejected(self):
@@ -215,7 +217,8 @@ class TestFanControllerSafety(unittest.TestCase):
         self.assertEqual(fc._mode, "default")
         self.assertTrue(fc._degraded)
         self.assertEqual(fc._degrade_reason, "test reason")
-        self.assertEqual(self.hw._mock_enable, 2)
+        # 降级后仍然 pwm_enable=1，靠保守曲线控制
+        self.assertEqual(self.hw._mock_enable, 1)
         fc.stop()
 
 

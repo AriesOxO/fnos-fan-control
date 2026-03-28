@@ -33,6 +33,16 @@ DEFAULT_CONFIG = {
 VALID_MODES = ("default", "auto", "manual", "full")
 VALID_TEMP_SOURCES = ("cpu", "disk", "max")
 
+# 默认模式使用的保守曲线（不可用户编辑，比自动模式更宽松）
+DEFAULT_SAFE_CURVE = [
+    {"temp": 30, "pwm_percent": 25},
+    {"temp": 45, "pwm_percent": 35},
+    {"temp": 55, "pwm_percent": 50},
+    {"temp": 65, "pwm_percent": 70},
+    {"temp": 75, "pwm_percent": 90},
+    {"temp": 80, "pwm_percent": 100},
+]
+
 # 绝对下限���分比，与 hardware.py 的 ABSOLUTE_MIN_PWM 对应
 ABSOLUTE_MIN_PERCENT = 10
 

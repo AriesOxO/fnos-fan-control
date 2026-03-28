@@ -14,7 +14,7 @@ import threading
 import time
 
 from hardware import Hardware
-from config_manager import ConfigManager
+from config_manager import ConfigManager, DEFAULT_SAFE_CURVE
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +56,8 @@ class FanController(threading.Thread):
         with self._lock:
             self._mode = config["mode"]
 
-        if self._mode != self.MODE_DEFAULT:
-            self._hw.set_pwm_mode(1, config["fan_channel"])
+        # 所有模式都用 pwm_enable=1（芯片自动模式=全速不可用）
+        self._hw.set_pwm_mode(1, config["fan_channel"])
 
         logger.info("风扇控制线程启动，模式: %s", self._mode)
         names = {"default": "默认模式", "auto": "自动模式", "manual": "手动模式", "full": "全速模式"}
@@ -91,18 +91,17 @@ class FanController(threading.Thread):
         disk_temps = self._hw.read_disk_temps()
         effective_temp = self._get_effective_temp(cpu_temp, disk_temps, config["temp_source"])
 
-        # 2. 非默认模式：每个周期确认 pwm_enable=1（自愈机制）
-        if mode != self.MODE_DEFAULT:
-            current_enable = self._hw.read_pwm_enable(channel)
-            if current_enable != 1:
-                logger.warning("pwm_enable=%s 不一致，重新设置为 1", current_enable)
-                self._add_log("warn", "pwm_enable 不一致，自动修正")
-                if not self._hw.set_pwm_mode(1, channel):
-                    self._degrade("无法恢复 PWM 手动模式")
-                    return
+        # 2. 所有模式都用 pwm_enable=1（因为芯片自动模式=全速，不可用）
+        current_enable = self._hw.read_pwm_enable(channel)
+        if current_enable != 1:
+            logger.warning("pwm_enable=%s 不一致，重新设置为 1", current_enable)
+            self._add_log("warn", "pwm_enable 不一致，自动修正")
+            if not self._hw.set_pwm_mode(1, channel):
+                self._degrade("无法恢复 PWM 手动模式")
+                return
 
-        # 3. 检查温度读取是否临界（仅非默认模式）
-        if self._hw.is_read_failure_critical and mode != self.MODE_DEFAULT:
+        # 3. 检查温度读取是否临界
+        if self._hw.is_read_failure_critical:
             if self._hw.read_fail_count >= 5:
                 self._degrade("温度连续读取失败 5 次")
                 return
@@ -116,8 +115,8 @@ class FanController(threading.Thread):
         # 3. 根据模式计算目标 PWM
         target_pwm = self._calculate_target_pwm(mode, effective_temp, config)
 
-        # 4. 写入硬件（仅非默认模式）
-        if mode != self.MODE_DEFAULT and target_pwm is not None:
+        # 4. 写入硬件（所有模式都写，因为芯片自动模式=全速不可用）
+        if target_pwm is not None:
             ok = self._hw.write_pwm(target_pwm, channel, config["min_pwm_percent"])
             if not ok:
                 self._write_fail_count += 1
@@ -149,7 +148,10 @@ class FanController(threading.Thread):
     def _calculate_target_pwm(self, mode, temp, config):
         """根据模式计算目标 PWM 值"""
         if mode == self.MODE_DEFAULT:
-            return None
+            # 默认模式使用保守曲线（芯片自动模式=全速，不可用）
+            if temp is None:
+                return None
+            return self._interpolate_curve(temp, DEFAULT_SAFE_CURVE)
         if mode == self.MODE_FULL:
             return 255
         if mode == self.MODE_MANUAL:
@@ -183,9 +185,10 @@ class FanController(threading.Thread):
         return int(255 * curve[-1]["pwm_percent"] / 100)
 
     def _degrade(self, reason):
-        """异常降级：恢复默认模式"""
+        """异常降级：恢复默认模式（保守曲线）"""
         logger.error("异常降级: %s", reason)
-        self._hw.restore_safe_state()
+        # 不用 restore_safe_state（那会设 pwm_enable=2 即全速）
+        # 保持 pwm_enable=1，靠保守曲线控制
         self._hw.reset_read_fail_count()
         with self._lock:
             self._mode = self.MODE_DEFAULT
@@ -244,27 +247,31 @@ class FanController(threading.Thread):
         channel = config["fan_channel"]
 
         # 1. 先操作硬件（在修改 _mode 之前）
-        #    这样守护线程不会在硬件状态不一致时读到新模式
+        #    所有模式都用 pwm_enable=1（芯片自动模式=全速不可用）
+        if not self._hw.set_pwm_mode(1, channel):
+            logger.error("set_pwm_mode(1) 失败，模式切换中止")
+            return False
+
         if mode == self.MODE_DEFAULT:
-            if not self._hw.set_pwm_mode(2, channel):
-                logger.error("set_pwm_mode(2) 失败，模式切换中止")
-                return False
-        else:
-            if not self._hw.set_pwm_mode(1, channel):
-                logger.error("set_pwm_mode(1) 失败，模式切换中止")
-                return False
-            if mode == self.MODE_FULL:
-                self._hw.write_pwm(255, channel, min_percent=0)
-            elif mode == self.MODE_MANUAL:
-                pwm_val = int(255 * config["manual_pwm_percent"] / 100)
+            # 默认模式：立即写入保守曲线对应的 PWM
+            cpu_temp = self._hw.read_cpu_temp()
+            disk_temps = self._hw.read_disk_temps()
+            effective_temp = self._get_effective_temp(cpu_temp, disk_temps, config["temp_source"])
+            if effective_temp is not None:
+                pwm_val = self._interpolate_curve(effective_temp, DEFAULT_SAFE_CURVE)
                 self._hw.write_pwm(pwm_val, channel, config["min_pwm_percent"])
-            elif mode == self.MODE_AUTO:
-                cpu_temp = self._hw.read_cpu_temp()
-                disk_temps = self._hw.read_disk_temps()
-                effective_temp = self._get_effective_temp(cpu_temp, disk_temps, config["temp_source"])
-                if effective_temp is not None:
-                    pwm_val = self._interpolate_curve(effective_temp, config["curve"])
-                    self._hw.write_pwm(pwm_val, channel, config["min_pwm_percent"])
+        elif mode == self.MODE_FULL:
+            self._hw.write_pwm(255, channel, min_percent=0)
+        elif mode == self.MODE_MANUAL:
+            pwm_val = int(255 * config["manual_pwm_percent"] / 100)
+            self._hw.write_pwm(pwm_val, channel, config["min_pwm_percent"])
+        elif mode == self.MODE_AUTO:
+            cpu_temp = self._hw.read_cpu_temp()
+            disk_temps = self._hw.read_disk_temps()
+            effective_temp = self._get_effective_temp(cpu_temp, disk_temps, config["temp_source"])
+            if effective_temp is not None:
+                pwm_val = self._interpolate_curve(effective_temp, config["curve"])
+                self._hw.write_pwm(pwm_val, channel, config["min_pwm_percent"])
 
         # 2. 硬件就绪后再修改模式（锁内）
         with self._lock:
