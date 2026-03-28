@@ -1,0 +1,14 @@
+#!/bin/bash
+# 升级前执行：恢复安全状态
+
+for hwmon_dir in /sys/class/hwmon/hwmon*; do
+    if [ "$(cat "$hwmon_dir/name" 2>/dev/null)" = "it8772" ]; then
+        for pwm_enable in "$hwmon_dir"/pwm*_enable; do
+            if [ -f "$pwm_enable" ]; then
+                echo 2 > "$pwm_enable" 2>/dev/null
+            fi
+        done
+    fi
+done
+
+exit 0

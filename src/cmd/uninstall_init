@@ -1,0 +1,22 @@
+#!/bin/bash
+# 卸载前执行：恢复硬件安全状态 + 清理 nginx 反代
+
+# 恢复所有 IT8772 PWM 通道为自动模式
+for hwmon_dir in /sys/class/hwmon/hwmon*; do
+    if [ "$(cat "$hwmon_dir/name" 2>/dev/null)" = "it8772" ]; then
+        for pwm_enable in "$hwmon_dir"/pwm*_enable; do
+            if [ -f "$pwm_enable" ]; then
+                echo 2 > "$pwm_enable" 2>/dev/null
+            fi
+        done
+    fi
+done
+
+# 清理 nginx 反代配置
+NGINX_CONF="/usr/trim/nginx/conf/conf.d/fan_control.conf"
+if [ -f "$NGINX_CONF" ]; then
+    rm -f "$NGINX_CONF"
+    /usr/trim/nginx/sbin/nginx -s reload 2>/dev/null || true
+fi
+
+exit 0

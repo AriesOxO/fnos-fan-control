@@ -1,0 +1,216 @@
+#!/bin/bash
+
+# 风扇控制器 — FPK 生命周期管理脚本
+# 职责：start / stop / status + 看门狗进程
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+PID_FILE="${TRIM_PKGVAR}/app.pid"
+WATCHDOG_PID_FILE="${TRIM_PKGVAR}/watchdog.pid"
+
+# Python 路径（飞牛内置 python312）
+PYTHON="/var/apps/python312/target/bin/python3.12"
+if [ ! -x "$PYTHON" ]; then
+    PYTHON=$(which python3 2>/dev/null || echo "python3")
+fi
+
+
+CMD="${PYTHON} ${TRIM_APPDEST}/bin/main.py"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}" 2>/dev/null
+}
+
+# ── 核心安全函数 ─────────────────────────────────────────
+restore_safe_state() {
+    # 恢复所有 IT8772 PWM 通道为自动模式 (pwm_enable=2)
+    # 独立于 Python 进程，纯 bash 实现
+    for hwmon_dir in /sys/class/hwmon/hwmon*; do
+        if [ "$(cat "$hwmon_dir/name" 2>/dev/null)" = "it8772" ]; then
+            for pwm_enable in "$hwmon_dir"/pwm*_enable; do
+                if [ -f "$pwm_enable" ]; then
+                    echo 2 > "$pwm_enable" 2>/dev/null
+                fi
+            done
+            log_msg "restore_safe_state: 已恢复 $hwmon_dir 所有 PWM 通道为自动模式"
+            return 0
+        fi
+    done
+    log_msg "restore_safe_state: 未找到 IT8772 芯片"
+    return 1
+}
+
+# ── 看门狗 ───────────────────────────────────────────────
+start_watchdog() {
+    local app_pid=$1
+    (
+        while kill -0 "$app_pid" 2>/dev/null; do
+            sleep 5
+        done
+        # 进程意外退出，恢复安全状态
+        log_msg "看门狗检测到进程 $app_pid 退出，恢复安全状态"
+        restore_safe_state
+    ) &
+    local wd_pid=$!
+    printf "%s" "$wd_pid" > "${WATCHDOG_PID_FILE}"
+    log_msg "看门狗已启动 (PID=$wd_pid), 监控进程 $app_pid"
+}
+
+stop_watchdog() {
+    if [ -f "${WATCHDOG_PID_FILE}" ]; then
+        local wd_pid
+        wd_pid=$(head -n 1 "${WATCHDOG_PID_FILE}" | tr -d '[:space:]')
+        if [ -n "$wd_pid" ] && kill -0 "$wd_pid" 2>/dev/null; then
+            kill "$wd_pid" 2>/dev/null
+            wait "$wd_pid" 2>/dev/null
+            log_msg "看门狗已停止 (PID=$wd_pid)"
+        fi
+        rm -f "${WATCHDOG_PID_FILE}"
+    fi
+}
+
+# ── 进程管理 ─────────────────────────────────────────────
+check_process() {
+    local pid=$1
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+verify_process() {
+    local pid=$1
+    ps aux 2>/dev/null | grep -v grep | grep "${CMD}" | awk '{print $2}' | grep -q "^${pid}$"
+}
+
+find_process() {
+    ps aux 2>/dev/null | grep -v grep | grep "${CMD}" | awk '{print $2}' | head -n 1
+}
+
+status() {
+    # 检查 PID 文件
+    if [ -f "${PID_FILE}" ]; then
+        local pid
+        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+        if check_process "$pid" && verify_process "$pid"; then
+            return 0
+        fi
+        rm -f "${PID_FILE}"
+    fi
+
+    # 回退搜索
+    local pid
+    pid=$(find_process)
+    if [ -n "$pid" ]; then
+        printf "%s" "$pid" > "${PID_FILE}"
+        return 0
+    fi
+
+    return 1
+}
+
+start_process() {
+    if status; then
+        log_msg "进程已在运行"
+        return 0
+    fi
+
+    log_msg "启动风扇控制器..."
+
+    # 1. 先恢复安全状态
+    restore_safe_state
+
+    # 2. 确保日志目录存在
+    mkdir -p "$(dirname "${LOG_FILE}")" 2>/dev/null
+
+    # 3. 启动 Python 主程序
+    bash -c "${CMD}" >> "${LOG_FILE}" 2>&1 &
+    local app_pid=$!
+    printf "%s" "$app_pid" > "${PID_FILE}"
+    log_msg "进程已启动 (PID=$app_pid)"
+
+    # 4. 等待进程稳定
+    sleep 2
+    if ! check_process "$app_pid"; then
+        log_msg "进程启动失败"
+        restore_safe_state
+        return 1
+    fi
+
+    # 5. 启动看门狗
+    start_watchdog "$app_pid"
+
+    return 0
+}
+
+stop_process() {
+    log_msg "停止风扇控制器..."
+
+    # 停止看门狗（先停，避免看门狗检测到进程退出后重复恢复）
+    stop_watchdog
+
+    local pid=""
+
+    # 从 PID 文件获取
+    if [ -f "${PID_FILE}" ]; then
+        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+        if ! check_process "$pid"; then
+            pid=""
+        fi
+    fi
+
+    # 回退搜索
+    if [ -z "$pid" ]; then
+        pid=$(find_process)
+    fi
+
+    if [ -z "$pid" ]; then
+        log_msg "进程未运行"
+        rm -f "${PID_FILE}"
+        restore_safe_state
+        return 0
+    fi
+
+    # 发送 SIGTERM
+    log_msg "发送 SIGTERM 到 PID=$pid"
+    kill -TERM "$pid" 2>/dev/null
+
+    # 等待退出（最多 10 秒）
+    local count=0
+    while check_process "$pid" && [ $count -lt 10 ]; do
+        sleep 1
+        count=$((count + 1))
+    done
+
+    # 超时强杀
+    if check_process "$pid"; then
+        log_msg "SIGTERM 超时，发送 SIGKILL"
+        kill -KILL "$pid" 2>/dev/null
+        sleep 1
+    fi
+
+    rm -f "${PID_FILE}"
+
+    # 双保险：无论进程如何退出，都恢复安全状态
+    restore_safe_state
+
+    log_msg "进程已停止"
+    return 0
+}
+
+# ── 入口 ─────────────────────────────────────────────────
+case $1 in
+start)
+    start_process
+    ;;
+stop)
+    stop_process
+    ;;
+status)
+    if status; then
+        exit 0
+    else
+        exit 3
+    fi
+    ;;
+*)
+    echo "Usage: $0 {start|stop|status}"
+    exit 1
+    ;;
+esac

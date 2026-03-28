@@ -1,0 +1,29 @@
+#!/bin/bash
+# 安装后执行：放置清理脚本 + 配置 drivetemp
+
+# 将清理脚本放到 /tmp（卸载后仍可用）
+cat > /tmp/cleanup-fan-control.sh << 'CLEANUP'
+#!/bin/bash
+echo "清理风扇控制器残留..."
+userdel fan-control 2>/dev/null && echo "  已删除用户 fan-control" || echo "  用户不存在，跳过"
+groupdel fan-control 2>/dev/null && echo "  已删除组 fan-control" || echo "  组不存在，跳过"
+for vol in /vol0 /vol1 /vol2; do
+    for dir in @appconf @appdata @apphome @appmeta @apptemp @appcenter; do
+        if [ -d "$vol/$dir/fan-control" ]; then
+            rm -rf "$vol/$dir/fan-control"
+            echo "  已删除 $vol/$dir/fan-control"
+        fi
+    done
+done
+rm -rf /var/apps/fan-control 2>/dev/null && echo "  已删除 /var/apps/fan-control" || true
+echo "清理完成，可以重新安装。"
+CLEANUP
+chmod +x /tmp/cleanup-fan-control.sh
+
+# 配置 drivetemp 开机自动加载
+MODULES_FILE="/etc/modules-load.d/fan-control.conf"
+if [ ! -f "$MODULES_FILE" ]; then
+    echo "drivetemp" > "$MODULES_FILE" 2>/dev/null || true
+fi
+
+exit 0

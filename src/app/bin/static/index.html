@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>风扇控制器</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0f1923;--bg2:#141e2b;--card:#1a2736;--card-hover:#1e2f42;
+  --accent:#00b4d8;--accent2:#0096c7;--accent-glow:rgba(0,180,216,.15);
+  --safe:#2dd4a8;--warn:#f59e0b;--danger:#ef4444;
+  --text:#eaf0f6;--text2:#7a8fa6;--text3:#4a5d73;
+  --border:#243447;--input-bg:#0d1720;--input-border:#2a3e52;
+  --shadow:0 2px 12px rgba(0,0,0,.3);
+}
+body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;min-height:100vh}
+.container{max-width:860px;margin:0 auto;padding:16px}
+
+/* ── Toast ── */
+.toast{position:fixed;top:24px;left:50%;transform:translateX(-50%) translateY(-20px);padding:10px 28px;border-radius:8px;font-size:13px;font-weight:500;z-index:999;opacity:0;transition:all .3s ease;pointer-events:none;backdrop-filter:blur(8px)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.success{background:rgba(45,212,168,.9);color:#fff;box-shadow:0 4px 20px rgba(45,212,168,.3)}
+.toast.fail{background:rgba(239,68,68,.9);color:#fff;box-shadow:0 4px 20px rgba(239,68,68,.3)}
+
+/* ── 顶部 ── */
+.header{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;background:var(--card);border-radius:12px;margin-bottom:16px;box-shadow:var(--shadow)}
+.header-left{display:flex;align-items:center;gap:12px}
+.header-icon{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center}
+.header-icon svg{width:20px;height:20px;fill:#fff}
+.header h1{font-size:18px;font-weight:700;letter-spacing:-.3px}
+.status-badge{display:flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:500}
+.status-badge.ok{background:rgba(45,212,168,.12);color:var(--safe)}
+.status-badge.warn{background:rgba(245,158,11,.12);color:var(--warn)}
+.status-badge.off{background:rgba(122,143,166,.12);color:var(--text2)}
+.pulse{width:8px;height:8px;border-radius:50%;position:relative}
+.pulse.ok{background:var(--safe)}
+.pulse.warn{background:var(--warn)}
+.pulse.off{background:var(--text3)}
+.pulse.ok::after{content:'';position:absolute;inset:-3px;border-radius:50%;border:2px solid var(--safe);animation:pulse-ring 2s ease-out infinite;opacity:0}
+@keyframes pulse-ring{0%{transform:scale(.8);opacity:.6}100%{transform:scale(1.6);opacity:0}}
+
+/* ── 告警 ── */
+.alert{padding:10px 16px;border-radius:10px;margin-bottom:16px;font-size:13px;display:none;align-items:center;gap:8px;backdrop-filter:blur(4px)}
+.alert.warn{background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);color:var(--warn);display:flex}
+.alert.error{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);color:var(--danger);display:flex}
+.alert-icon{flex-shrink:0;font-size:16px}
+
+/* ── 卡片 ── */
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.card{background:var(--card);border-radius:12px;padding:16px;text-align:center;border:1px solid var(--border);transition:all .25s ease;position:relative;overflow:hidden;box-shadow:var(--shadow)}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;border-radius:12px 12px 0 0;opacity:.7;transition:opacity .3s}
+.card:hover{transform:translateY(-2px);border-color:var(--input-border);box-shadow:0 4px 20px rgba(0,0,0,.4)}
+.card-icon{font-size:20px;margin-bottom:6px;opacity:.8}
+.card-label{font-size:11px;color:var(--text2);margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+.card-value{font-size:26px;font-weight:800;letter-spacing:-.5px;transition:color .3s}
+.card-unit{font-size:13px;font-weight:400;color:var(--text2)}
+.card-sub{font-size:11px;color:var(--text3);margin-top:4px}
+.card.c-cpu::before{background:linear-gradient(90deg,var(--safe),var(--accent))}
+.card.c-disk::before{background:linear-gradient(90deg,var(--accent),#6366f1)}
+.card.c-fan::before{background:linear-gradient(90deg,#6366f1,#a855f7)}
+.card.c-pwm::before{background:linear-gradient(90deg,#a855f7,var(--accent))}
+.card.danger{border-color:var(--danger)}.card.danger::before{background:var(--danger)!important;opacity:1}
+.card.warn-border{border-color:var(--warn)}.card.warn-border::before{background:var(--warn)!important}
+.temp-safe{color:var(--safe)}.temp-warn{color:var(--warn)}.temp-danger{color:var(--danger)}
+.fan-zero{color:var(--danger);animation:blink 1s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ── 进度条 ── */
+.progress-bar{height:4px;background:var(--input-bg);border-radius:2px;margin-top:10px;overflow:hidden}
+.progress-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--accent),#a855f7);transition:width .6s ease}
+
+/* ── Section ── */
+.section{background:var(--card);border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid var(--border);box-shadow:var(--shadow)}
+.section-title{font-size:14px;font-weight:700;margin-bottom:14px;color:var(--text);display:flex;align-items:center;gap:8px;letter-spacing:-.2px}
+.section-title .s-icon{font-size:16px;opacity:.7}
+
+/* ── 模式 ── */
+.mode-btns{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+.mode-btn{padding:14px 8px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);color:var(--text);cursor:pointer;text-align:center;transition:all .25s ease;position:relative;overflow:hidden}
+.mode-btn:hover:not(:disabled){border-color:var(--accent);background:var(--card-hover);transform:translateY(-1px)}
+.mode-btn.active{border-color:var(--accent);background:var(--accent-glow);box-shadow:0 0 20px rgba(0,180,216,.1)}
+.mode-btn.active::after{content:'';position:absolute;bottom:0;left:20%;right:20%;height:2px;background:var(--accent);border-radius:2px}
+.mode-btn:disabled{opacity:.3;cursor:not-allowed}
+.mode-btn .m-icon{font-size:22px;margin-bottom:4px}
+.mode-btn .name{font-size:13px;font-weight:700}
+.mode-btn .desc{font-size:10px;color:var(--text2);margin-top:2px}
+.mode-detail{padding:14px;background:var(--bg2);border-radius:10px;margin-top:10px;border:1px solid var(--border)}
+.mode-warn{font-size:12px;color:var(--warn);margin-top:8px;display:flex;align-items:center;gap:4px}
+
+/* ── 滑块 ── */
+.slider-row{display:flex;align-items:center;gap:12px}
+.slider-row span:first-child{font-size:13px;color:var(--text2);white-space:nowrap}
+input[type=range]{flex:1;-webkit-appearance:none;height:6px;border-radius:3px;background:var(--input-bg);outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--accent);cursor:pointer;box-shadow:0 0 8px rgba(0,180,216,.4);transition:box-shadow .2s}
+input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216,.6)}
+.slider-val{min-width:44px;text-align:right;font-weight:700;font-size:15px;color:var(--accent)}
+
+/* ── 按钮 ── */
+.btn{padding:8px 22px;border:none;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;cursor:pointer;font-size:13px;font-weight:600;transition:all .2s;box-shadow:0 2px 8px rgba(0,180,216,.2)}
+.btn:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(0,180,216,.3)}
+.btn:active{transform:translateY(0)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn-secondary{background:var(--bg2);border:1px solid var(--border);box-shadow:none;color:var(--text2)}
+.btn-secondary:hover{background:var(--card-hover);color:var(--text);box-shadow:none}
+.btn-danger{background:linear-gradient(135deg,var(--danger),#dc2626);box-shadow:0 2px 8px rgba(239,68,68,.2);font-size:12px;padding:6px 14px}
+.btn-group{display:flex;gap:8px;margin-top:14px}
+
+/* ── 曲线 ── */
+.curve-container{margin-bottom:14px;border-radius:10px;overflow:hidden;border:1px solid var(--border)}
+.curve-svg{width:100%;height:220px;background:var(--bg2)}
+.curve-line{stroke:var(--accent);stroke-width:2.5;fill:none;filter:drop-shadow(0 0 4px rgba(0,180,216,.3))}
+.curve-area{fill:url(#curveGrad)}
+.curve-dot{fill:var(--accent);stroke:#fff;stroke-width:2;r:5;filter:drop-shadow(0 0 3px rgba(0,180,216,.5))}
+.curve-grid{stroke:var(--border);stroke-width:0.5;stroke-dasharray:4,4}
+.curve-label{fill:var(--text3);font-size:10px;font-family:inherit}
+.curve-temp-line{stroke:var(--warn);stroke-width:1;stroke-dasharray:6,3;opacity:.6}
+.curve-inputs{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.curve-node{display:flex;align-items:center;gap:6px;font-size:13px;padding:8px 12px;background:var(--bg2);border-radius:8px;border:1px solid var(--border)}
+.curve-node .node-label{color:var(--text2);font-size:11px;font-weight:600;min-width:40px}
+.curve-node input{width:48px;padding:5px 6px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:6px;color:var(--text);text-align:center;font-size:13px;font-weight:600;transition:border-color .2s}
+.curve-node input:focus{outline:none;border-color:var(--accent)}
+.curve-node input.invalid{border-color:var(--danger);background:rgba(239,68,68,.05)}
+.curve-node .arrow{color:var(--text3)}
+.curve-node .btn-del{background:none;border:none;color:var(--danger);cursor:pointer;font-size:16px;padding:2px 6px;opacity:.6;transition:opacity .2s}
+.curve-node .btn-del:hover{opacity:1}
+
+/* 自动生成 */
+.curve-gen{margin-bottom:12px;padding:10px 14px;background:var(--bg2);border-radius:8px;border:1px solid var(--border)}
+.gen-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}
+.gen-label{color:var(--text2);font-weight:600;font-size:12px}
+.gen-select{padding:5px 8px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:6px;color:var(--text);font-size:12px}
+.gen-input{width:48px;padding:5px 6px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:6px;color:var(--text);text-align:center;font-size:12px}
+.gen-sep{color:var(--text3)}
+.btn-sm{padding:5px 14px;font-size:12px}
+
+/* ── 折叠 ── */
+.collapsible{cursor:pointer;user-select:none}
+.collapse-arrow{display:inline-block;transition:transform .25s ease;font-size:10px;color:var(--text3);margin-left:4px}
+.collapsible.open .collapse-arrow{transform:rotate(90deg)}
+.collapse-body{max-height:0;overflow:hidden;transition:max-height .35s ease,opacity .25s ease;opacity:0}
+.collapse-body.open{max-height:2000px;opacity:1;padding-top:14px}
+
+/* ── 设置 ── */
+.setting-row{display:flex;align-items:center;gap:12px;margin-bottom:12px;font-size:13px;padding:4px 0}
+.setting-row label{min-width:72px;color:var(--text2);font-weight:500}
+.setting-row input[type=number]{width:64px;padding:6px 8px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:6px;color:var(--text);text-align:center;font-size:13px;font-weight:600;transition:border-color .2s}
+.setting-row input[type=number]:focus{outline:none;border-color:var(--accent)}
+.setting-row .hint{font-size:11px;color:var(--text3)}
+.radio-group{display:flex;gap:14px}
+.radio-group label{display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--text);font-size:13px}
+.radio-group input{accent-color:var(--accent)}
+
+/* ── 日志 ── */
+.log-header{display:flex;justify-content:space-between;align-items:center}
+.log-list{max-height:300px;overflow-y:auto}
+.log-item{display:flex;align-items:flex-start;gap:10px;padding:8px 12px;border-bottom:1px solid rgba(36,52,71,.4);font-size:12px;transition:background .15s}
+.log-item:hover{background:rgba(0,180,216,.03)}
+.log-time{color:var(--text3);white-space:nowrap;min-width:90px;font-family:"SF Mono",Consolas,monospace}
+.log-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;text-transform:uppercase;min-width:36px;text-align:center}
+.log-badge.info{background:rgba(0,180,216,.15);color:var(--accent)}
+.log-badge.warn{background:rgba(245,158,11,.15);color:var(--warn)}
+.log-badge.error{background:rgba(239,68,68,.15);color:var(--danger)}
+.log-msg{color:var(--text2);flex:1;word-break:break-all}
+.log-empty{text-align:center;color:var(--text3);padding:24px;font-size:13px}
+
+/* 使用说明 */
+.guide{font-size:13px;line-height:1.8}
+.guide-section{margin-bottom:16px}
+.guide-section h3{font-size:13px;font-weight:700;color:var(--accent);margin-bottom:6px}
+.guide-section ul{padding-left:18px;color:var(--text2)}
+.guide-section li{margin-bottom:4px}
+.guide-section li b{color:var(--text)}
+.guide-code{margin-top:8px;padding:10px 14px;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;font-family:"SF Mono",Consolas,monospace;font-size:12px;color:var(--warn);word-break:break-all;user-select:all}
+
+/* ── 响应式 ── */
+@media(max-width:640px){
+  .cards{grid-template-columns:repeat(2,1fr)}
+  .mode-btns{grid-template-columns:repeat(2,1fr)}
+  .curve-inputs{grid-template-columns:1fr}
+  .container{padding:10px}
+  .card-value{font-size:22px}
+}
+@media(max-width:380px){
+  .cards{grid-template-columns:1fr}
+  .mode-btns{grid-template-columns:repeat(2,1fr)}
+}
+</style>
+</head>
+<body>
+<div class="toast" id="toast"></div>
+<div class="container">
+  <!-- 顶部 -->
+  <div class="header">
+    <div class="header-left">
+      <div class="header-icon"><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c.83 0 1.5.67 1.5 1.5 0 1.64-1.14 3.33-1.14 3.33S11.5 8.78 11.5 6.5c0-.83.67-1.5 1.5-1.5zm-4.5 7c0-.83.67-1.5 1.5-1.5 1.64 0 3.33 1.14 3.33 1.14S10.78 12.5 8 12.5c-.83 0-1.5-.67-1.5-1.5zm6 5.5c-.83 0-1.5-.67-1.5-1.5 0-1.64 1.14-3.33 1.14-3.33s.86 1.05.86 3.33c0 .83-.67 1.5-1.5 1.5zm3-4c-1.64 0-3.33-1.14-3.33-1.14S14.22 11.5 17 11.5c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5z"/></svg></div>
+      <h1>风扇控制器</h1>
+    </div>
+    <div class="status-badge ok" id="statusBadge">
+      <div class="pulse ok" id="statusDot"></div>
+      <span id="statusText">运行中</span>
+    </div>
+  </div>
+
+  <!-- 告警 -->
+  <div class="alert" id="alertBar"><span class="alert-icon"></span><span id="alertText"></span></div>
+
+  <!-- 状态卡片 -->
+  <div class="cards">
+    <div class="card c-cpu" id="cardCpu">
+      <div class="card-icon">🌡</div>
+      <div class="card-label">CPU 温度</div>
+      <div class="card-value" id="cpuTemp">--<span class="card-unit">°C</span></div>
+    </div>
+    <div class="card c-disk" id="cardDisk">
+      <div class="card-icon">💾</div>
+      <div class="card-label">硬盘温度</div>
+      <div class="card-value" id="diskTemp">--<span class="card-unit">°C</span></div>
+      <div class="card-sub" id="diskDetail"></div>
+    </div>
+    <div class="card c-fan" id="cardFan">
+      <div class="card-icon">🌀</div>
+      <div class="card-label">风扇转速</div>
+      <div class="card-value" id="fanRpm">--<span class="card-unit"> RPM</span></div>
+    </div>
+    <div class="card c-pwm" id="cardPwm">
+      <div class="card-icon">⚡</div>
+      <div class="card-label">PWM 占比</div>
+      <div class="card-value" id="pwmPercent">--<span class="card-unit">%</span></div>
+      <div class="progress-bar"><div class="progress-fill" id="pwmBar" style="width:0"></div></div>
+    </div>
+  </div>
+
+  <!-- 运行模式 -->
+  <div class="section">
+    <div class="section-title"><span class="s-icon">⚙</span> 运行模式</div>
+    <div class="mode-btns" id="modeBtns">
+      <button class="mode-btn active" data-mode="default" onclick="switchMode('default')">
+        <div class="m-icon">🔄</div><div class="name">默认模式</div><div class="desc">芯片自主温控</div>
+      </button>
+      <button class="mode-btn" data-mode="auto" onclick="switchMode('auto')">
+        <div class="m-icon">📈</div><div class="name">自动模式</div><div class="desc">自定义曲线</div>
+      </button>
+      <button class="mode-btn" data-mode="manual" onclick="switchMode('manual')">
+        <div class="m-icon">🎚</div><div class="name">手动模式</div><div class="desc">固定转速</div>
+      </button>
+      <button class="mode-btn" data-mode="full" onclick="switchMode('full')">
+        <div class="m-icon">🚀</div><div class="name">全速模式</div><div class="desc">紧急散热</div>
+      </button>
+    </div>
+    <div class="mode-detail" id="manualPanel" style="display:none">
+      <div class="slider-row">
+        <span>转速调节</span>
+        <input type="range" id="manualSlider" min="10" max="100" value="50">
+        <span class="slider-val" id="manualVal">50%</span>
+        <button class="btn" onclick="applyManual()">应用</button>
+      </div>
+      <div class="mode-warn">⚠ 最低转速 10%，防止风扇停转</div>
+    </div>
+    <div class="mode-detail" id="fullPanel" style="display:none">
+      <div class="mode-warn">⚠ 风扇将以 100% 转速运行，噪音较大</div>
+    </div>
+  </div>
+
+  <!-- 温控曲线 -->
+  <div class="section" id="curveSection" style="display:none">
+    <div class="section-title"><span class="s-icon">📊</span> 温控曲线</div>
+    <div class="curve-container">
+      <svg class="curve-svg" id="curveSvg" viewBox="0 0 420 220">
+        <defs><linearGradient id="curveGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(0,180,216,.2)"/><stop offset="100%" stop-color="rgba(0,180,216,0)"/></linearGradient></defs>
+      </svg>
+    </div>
+    <!-- 自动生成 -->
+    <div class="curve-gen">
+      <div class="gen-row">
+        <span class="gen-label">自动生成</span>
+        <select id="genCount" class="gen-select"><option value="4">4 节点</option><option value="6" selected>6 节点</option><option value="8">8 节点</option><option value="10">10 节点</option></select>
+        <input type="number" id="genTempMin" class="gen-input" value="30" min="0" max="100" title="最低温度">
+        <span class="gen-sep">~</span>
+        <input type="number" id="genTempMax" class="gen-input" value="80" min="20" max="120" title="最高温度">
+        <span class="card-unit">°C</span>
+        <button class="btn btn-sm" onclick="generateCurve()">生成</button>
+      </div>
+    </div>
+    <div class="curve-inputs" id="curveInputs"></div>
+    <div class="btn-group">
+      <button class="btn btn-sm btn-secondary" onclick="addNode()">+ 添加节点</button>
+      <button class="btn btn-sm btn-secondary" onclick="removeNode()">- 删除末尾</button>
+      <div style="flex:1"></div>
+      <button class="btn" id="curveSaveBtn" onclick="saveCurve()">保存曲线</button>
+      <button class="btn btn-secondary" onclick="resetCurve()">恢复默认</button>
+    </div>
+  </div>
+
+  <!-- 高级设置 -->
+  <div class="section">
+    <div class="section-title collapsible" onclick="toggleCollapse(this)"><span class="s-icon">🔧</span> 高级设置 <span class="collapse-arrow">▶</span></div>
+    <div class="collapse-body">
+      <div class="setting-row">
+        <label>轮询间隔</label>
+        <input type="number" id="pollInterval" min="1" max="30" value="2"> <span class="hint">秒 (1-30)</span>
+      </div>
+      <div class="setting-row">
+        <label>最低转速</label>
+        <input type="number" id="minPwm" min="10" max="100" value="25"> <span class="hint">% (绝对下限 10%)</span>
+      </div>
+      <div class="setting-row">
+        <label>温度来源</label>
+        <div class="radio-group">
+          <label><input type="radio" name="tempSource" value="cpu" checked> CPU</label>
+          <label><input type="radio" name="tempSource" value="disk"> 硬盘</label>
+          <label><input type="radio" name="tempSource" value="max"> 最高值</label>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button class="btn" onclick="saveSettings()">保存设置</button>
+        <button class="btn btn-secondary" onclick="resetSettings()">恢复默认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 日志（默认折叠，点击展开） -->
+  <div class="section">
+    <div class="log-header">
+      <div class="section-title collapsible" onclick="toggleCollapse(this)" style="margin-bottom:0"><span class="s-icon">📋</span> 运行日志 <span class="collapse-arrow">▶</span></div>
+      <button class="btn btn-danger" onclick="clearLogs()">清空</button>
+    </div>
+    <div class="collapse-body">
+      <div class="log-list" id="logBody"><div class="log-empty">暂无日志</div></div>
+    </div>
+  </div>
+
+  <!-- 使用说明 -->
+  <div class="section">
+    <div class="section-title collapsible" onclick="toggleCollapse(this)"><span class="s-icon">📖</span> 使用说明 <span class="collapse-arrow">▶</span></div>
+    <div class="collapse-body">
+      <div class="guide">
+        <div class="guide-section">
+          <h3>运行模式</h3>
+          <ul>
+            <li><b>默认模式</b> — 不干预风扇，由主板 IT8772 芯片自主温控。安装后默认选择此模式，最安全。</li>
+            <li><b>自动模式</b> — 根据自定义温控曲线自动调节转速。温度越高转速越快，支持最多 10 个节点精细控制。</li>
+            <li><b>手动模式</b> — 固定转速运行。通过滑块设置 PWM 百分比，适合调试或特殊场景。</li>
+            <li><b>全速模式</b> — 风扇 100% 全速运转。用于紧急散热，噪音较大。</li>
+          </ul>
+        </div>
+        <div class="guide-section">
+          <h3>温控曲线</h3>
+          <ul>
+            <li>在自动模式下生效。每个节点定义一个"温度→转速"映射，节点之间线性插值平滑过渡。</li>
+            <li><b>自动生成</b>：选择节点数和温度范围，系统自动计算合理的转速分布（低温平缓、高温陡峭）。</li>
+            <li><b>手动微调</b>：直接修改节点的温度和转速值，曲线图实时预览。</li>
+            <li>橙色虚线表示当前 CPU 温度位置。</li>
+          </ul>
+        </div>
+        <div class="guide-section">
+          <h3>安全机制</h3>
+          <ul>
+            <li>最低转速保护：风扇转速不会低于设定的最低值（绝对下限 10%），防止停转。</li>
+            <li>异常降级：温度传感器连续读取失败时，自动切回默认模式并恢复芯片自主温控。</li>
+            <li>应用停止或崩溃时，看门狗进程会在 5 秒内恢复芯片自动温控模式。</li>
+          </ul>
+        </div>
+        <div class="guide-section">
+          <h3>卸载与重装</h3>
+          <ul>
+            <li>卸载后风扇自动恢复为系统原始温控，不影响硬件。</li>
+            <li>如果重装时提示"检查用户组失败"，请以 root 身份执行清理脚本：</li>
+          </ul>
+          <div class="guide-code">bash /tmp/cleanup-fan-control.sh</div>
+          <ul style="margin-top:8px">
+            <li>清理脚本已随应用安装到 /tmp 目录，卸载后仍可用。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let config={},pollTimer=null,hwDetected=true,connected=true,currentTemp=null;
+const DEFAULT_CURVE=[{temp:30,pwm_percent:20},{temp:40,pwm_percent:30},{temp:50,pwm_percent:45},{temp:60,pwm_percent:65},{temp:70,pwm_percent:85},{temp:80,pwm_percent:100}];
+
+function showToast(msg,type='success'){
+  const t=document.getElementById('toast');t.textContent=msg;
+  t.className='toast '+type+' show';
+  setTimeout(()=>{t.className='toast'},2500);
+}
+
+async function api(path,method='GET',body=null){
+  try{
+    const opts={method,headers:{}};
+    if(body){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}
+    const r=await fetch('/api/'+path,opts);const d=await r.json();
+    if(!connected){connected=true;updateConnectionStatus()}
+    return d;
+  }catch(e){if(connected){connected=false;updateConnectionStatus()}return null}
+}
+
+function startPolling(interval){
+  if(pollTimer)clearInterval(pollTimer);
+  pollTimer=setInterval(fetchStatus,interval*1000);fetchStatus();
+}
+
+async function fetchStatus(){
+  const s=await api('status');if(!s)return;
+  updateStatusCards(s);updateModeUI(s.mode);updateAlerts(s);
+  // 日志面板展开时实时更新
+  const logPanel=document.querySelector('.log-header .collapsible');
+  if(logPanel&&logPanel.classList.contains('open')) fetchLogs();
+}
+
+function updateStatusCards(s){
+  const cpuEl=document.getElementById('cpuTemp'),cpuCard=document.getElementById('cardCpu');
+  if(s.cpu_temp!=null){
+    currentTemp=s.cpu_temp;
+    cpuEl.innerHTML=s.cpu_temp.toFixed(1)+'<span class="card-unit">°C</span>';
+    cpuEl.className='card-value '+tempColorClass(s.cpu_temp);cpuCard.className='card c-cpu';
+  }else{cpuEl.innerHTML='--<span class="card-unit">°C</span>';cpuCard.className='card c-cpu warn-border'}
+
+  const diskEl=document.getElementById('diskTemp'),diskDetail=document.getElementById('diskDetail'),diskCard=document.getElementById('cardDisk');
+  const disks=s.disk_temps||{},diskNames=Object.keys(disks);
+  if(diskNames.length>0){
+    const mx=Math.max(...Object.values(disks));
+    diskEl.innerHTML=mx.toFixed(1)+'<span class="card-unit">°C</span>';
+    diskEl.className='card-value '+tempColorClass(mx);
+    diskDetail.textContent=diskNames.map(k=>k+': '+disks[k]+'°C').join('  ');diskCard.className='card c-disk';
+  }else{diskEl.innerHTML='--<span class="card-unit">°C</span>';diskDetail.textContent='';diskCard.className='card c-disk'}
+
+  const fanEl=document.getElementById('fanRpm'),fanCard=document.getElementById('cardFan');
+  if(s.fan_rpm!=null){
+    fanEl.innerHTML=s.fan_rpm+'<span class="card-unit"> RPM</span>';
+    if(s.fan_rpm===0){fanEl.className='card-value fan-zero';fanCard.className='card c-fan danger'}
+    else{fanEl.className='card-value';fanCard.className='card c-fan'}
+  }else{fanEl.innerHTML='--<span class="card-unit"> RPM</span>';fanCard.className='card c-fan'}
+
+  const pwmEl=document.getElementById('pwmPercent'),pwmBar=document.getElementById('pwmBar');
+  if(s.pwm_percent!=null){pwmEl.innerHTML=s.pwm_percent+'<span class="card-unit">%</span>';pwmBar.style.width=s.pwm_percent+'%'}
+  else{pwmEl.innerHTML='--<span class="card-unit">%</span>';pwmBar.style.width='0'}
+  hwDetected=s.hw_detected!==false;updateHwButtons();
+  if(document.getElementById('curveSection').style.display!=='none')drawCurve();
+}
+
+function tempColorClass(t){return t<50?'temp-safe':t<65?'temp-warn':'temp-danger'}
+
+function updateModeUI(mode){
+  document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
+  document.getElementById('manualPanel').style.display=mode==='manual'?'':'none';
+  document.getElementById('fullPanel').style.display=mode==='full'?'':'none';
+  document.getElementById('curveSection').style.display=mode==='auto'?'':'none';
+}
+
+function updateHwButtons(){document.querySelectorAll('.mode-btn').forEach(b=>{if(b.dataset.mode!=='default')b.disabled=!hwDetected})}
+
+async function switchMode(mode){
+  const names={default:'默认模式',auto:'自动模式',manual:'手动模式',full:'全速模式'};
+  const r=await api('mode','POST',{mode});
+  if(r&&r.ok){showToast('已切换到'+names[mode]);fetchStatus()}else showToast('切换失败','fail');
+}
+
+document.getElementById('manualSlider').addEventListener('input',function(){document.getElementById('manualVal').textContent=this.value+'%'});
+
+async function applyManual(){
+  const val=parseInt(document.getElementById('manualSlider').value);
+  const r=await api('config','POST',{manual_pwm_percent:val});
+  if(r&&r.ok)showToast('转速已设置为 '+val+'%');else showToast('设置失败','fail');
+}
+
+let curveData=JSON.parse(JSON.stringify(DEFAULT_CURVE));
+
+function renderCurveInputs(){
+  const c=document.getElementById('curveInputs');c.innerHTML='';
+  curveData.forEach((node,i)=>{
+    const div=document.createElement('div');div.className='curve-node';
+    div.innerHTML=`<span class="node-label">节点${i+1}</span><input type="number" min="0" max="120" value="${node.temp}" onchange="updateCurveNode(${i},'temp',this)" oninput="updateCurveNode(${i},'temp',this)"><span class="card-unit">°C</span><span class="arrow">→</span><input type="number" min="10" max="100" value="${node.pwm_percent}" onchange="updateCurveNode(${i},'pwm',this)" oninput="updateCurveNode(${i},'pwm',this)"><span class="card-unit">%</span>`;
+    c.appendChild(div);
+  });drawCurve();
+}
+
+function updateCurveNode(i,field,el){
+  const v=parseInt(el.value);if(field==='temp')curveData[i].temp=v;else curveData[i].pwm_percent=v;
+  validateCurve();drawCurve();
+}
+
+function validateCurve(){
+  let valid=true;const inputs=document.querySelectorAll('.curve-node input');
+  for(let i=0;i<curveData.length;i++){
+    const t=curveData[i].temp,p=curveData[i].pwm_percent;let nv=true;
+    if(isNaN(t)||t<0||t>120)nv=false;if(isNaN(p)||p<10||p>100)nv=false;
+    if(i>0&&t<=curveData[i-1].temp)nv=false;
+    inputs[i*2].classList.toggle('invalid',!nv);inputs[i*2+1].classList.toggle('invalid',!nv);
+    if(!nv)valid=false;
+  }
+  document.getElementById('curveSaveBtn').disabled=!valid;return valid;
+}
+
+function drawCurve(){
+  const svg=document.getElementById('curveSvg');
+  const W=420,H=220,PX=42,PY=15,PB=28,PR=15;const gW=W-PX-PR,gH=H-PY-PB;
+  let html='<defs><linearGradient id="curveGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(0,180,216,.2)"/><stop offset="100%" stop-color="rgba(0,180,216,0)"/></linearGradient></defs>';
+  for(let t=0;t<=120;t+=20){const x=PX+(t/120)*gW;html+=`<line class="curve-grid" x1="${x}" y1="${PY}" x2="${x}" y2="${H-PB}"/><text class="curve-label" x="${x}" y="${H-8}" text-anchor="middle">${t}°</text>`}
+  for(let p=0;p<=100;p+=25){const y=H-PB-(p/100)*gH;html+=`<line class="curve-grid" x1="${PX}" y1="${y}" x2="${W-PR}" y2="${y}"/><text class="curve-label" x="${PX-6}" y="${y+4}" text-anchor="end">${p}%</text>`}
+  if(curveData.length>=2){
+    const pts=curveData.map(n=>({x:PX+(n.temp/120)*gW,y:H-PB-(n.pwm_percent/100)*gH}));
+    html+=`<path class="curve-area" d="M${pts.map(p=>p.x+','+p.y).join('L')}L${pts[pts.length-1].x},${H-PB}L${pts[0].x},${H-PB}Z"/>`;
+    html+=`<polyline class="curve-line" points="${pts.map(p=>p.x+','+p.y).join(' ')}"/>`;
+    pts.forEach(p=>{html+=`<circle class="curve-dot" cx="${p.x}" cy="${p.y}"/>`});
+  }
+  if(currentTemp!=null){const tx=PX+(currentTemp/120)*gW;html+=`<line class="curve-temp-line" x1="${tx}" y1="${PY}" x2="${tx}" y2="${H-PB}"/><text fill="var(--warn)" font-size="10" x="${tx}" y="${PY-3}" text-anchor="middle">${currentTemp.toFixed(0)}°C</text>`}
+  svg.innerHTML=html;
+}
+
+async function saveCurve(){
+  if(!validateCurve())return;
+  const r=await api('config','POST',{curve:curveData});
+  if(r&&r.ok)showToast('温控曲线已保存');else showToast('保存失败','fail');
+}
+function resetCurve(){curveData=JSON.parse(JSON.stringify(DEFAULT_CURVE));renderCurveInputs();showToast('已恢复默认曲线')}
+
+async function generateCurve(){
+  const count=parseInt(document.getElementById('genCount').value);
+  const temp_min=parseInt(document.getElementById('genTempMin').value);
+  const temp_max=parseInt(document.getElementById('genTempMax').value);
+  const r=await api('curve/generate','POST',{count,temp_min,temp_max,pwm_min:config.min_pwm_percent||20,pwm_max:100});
+  if(r&&r.ok&&r.curve){curveData=r.curve;renderCurveInputs();showToast(`已生成 ${count} 节点曲线`)}
+  else showToast('生成失败','fail');
+}
+
+function addNode(){
+  if(curveData.length>=10){showToast('最多支持 10 个节点','fail');return}
+  const last=curveData[curveData.length-1];
+  const newTemp=Math.min(120,last.temp+10);
+  const newPwm=Math.min(100,last.pwm_percent+10);
+  curveData.push({temp:newTemp,pwm_percent:newPwm});
+  renderCurveInputs();showToast('已添加节点');
+}
+
+function removeNode(){
+  if(curveData.length<=2){showToast('至少需要 2 个节点','fail');return}
+  curveData.pop();renderCurveInputs();showToast('已删除末尾节点');
+}
+
+async function saveSettings(){
+  const data={poll_interval:parseInt(document.getElementById('pollInterval').value),min_pwm_percent:parseInt(document.getElementById('minPwm').value),temp_source:document.querySelector('input[name=tempSource]:checked').value};
+  const r=await api('config','POST',data);
+  if(r&&r.ok){config=r.config;startPolling(config.poll_interval||2);showToast('设置已保存')}else showToast('保存失败','fail');
+}
+function resetSettings(){document.getElementById('pollInterval').value=2;document.getElementById('minPwm').value=25;document.querySelector('input[name=tempSource][value=cpu]').checked=true;showToast('已恢复默认设置')}
+
+function loadConfig(cfg){
+  config=cfg;
+  document.getElementById('pollInterval').value=cfg.poll_interval||2;
+  document.getElementById('minPwm').value=cfg.min_pwm_percent||25;
+  const src=cfg.temp_source||'cpu';const radio=document.querySelector(`input[name=tempSource][value=${src}]`);if(radio)radio.checked=true;
+  document.getElementById('manualSlider').value=cfg.manual_pwm_percent||50;
+  document.getElementById('manualSlider').min=Math.max(10,cfg.min_pwm_percent||10);
+  document.getElementById('manualVal').textContent=(cfg.manual_pwm_percent||50)+'%';
+  if(cfg.curve)curveData=JSON.parse(JSON.stringify(cfg.curve));renderCurveInputs();
+}
+
+function updateAlerts(s){
+  const bar=document.getElementById('alertBar'),icon=document.querySelector('.alert-icon'),txt=document.getElementById('alertText');
+  const badge=document.getElementById('statusBadge'),dot=document.getElementById('statusDot'),stxt=document.getElementById('statusText');
+  if(s.degraded){bar.className='alert warn';icon.textContent='⚠';txt.textContent='已恢复系统默认温控（原因：'+(s.degrade_reason||'未知')+'）';badge.className='status-badge warn';dot.className='pulse warn';stxt.textContent='降级模式'}
+  else if(!s.hw_detected){bar.className='alert warn';icon.textContent='⚠';txt.textContent='IT8772 传感器未探测到，仅提供温度监控';badge.className='status-badge warn';dot.className='pulse warn';stxt.textContent='仅监控'}
+  else{bar.className='alert';badge.className='status-badge ok';dot.className='pulse ok';stxt.textContent='运行中'}
+}
+
+function updateConnectionStatus(){
+  const badge=document.getElementById('statusBadge'),dot=document.getElementById('statusDot'),stxt=document.getElementById('statusText'),bar=document.getElementById('alertBar'),icon=document.querySelector('.alert-icon'),txt=document.getElementById('alertText');
+  if(!connected){badge.className='status-badge off';dot.className='pulse off';stxt.textContent='连接中断';bar.className='alert error';icon.textContent='⚠';txt.textContent='与服务器连接中断，自动重试中...'}
+}
+
+function updateLogs(logs){
+  const body=document.getElementById('logBody');
+  if(!logs.length){body.innerHTML='<div class="log-empty">暂无日志</div>';return}
+  body.innerHTML='';
+  logs.slice().reverse().forEach(l=>{
+    const div=document.createElement('div');div.className='log-item';
+    const level=l.level||'info';
+    div.innerHTML=`<span class="log-time">${l.time||''}</span><span class="log-badge ${level}">${level}</span><span class="log-msg">${l.message||''}</span>`;
+    body.appendChild(div);
+  });
+}
+
+async function clearLogs(){
+  const r=await api('logs/clear','POST',{});
+  if(r&&r.ok){document.getElementById('logBody').innerHTML='<div class="log-empty">暂无日志</div>';showToast('日志已清空')}else showToast('清空失败','fail');
+}
+
+function toggleCollapse(el){
+  el.classList.toggle('open');
+  const body=el.nextElementSibling;
+  body.classList.toggle('open');
+  // 日志面板展开时立即拉取
+  if(el.classList.contains('open')&&el.closest('.log-header')){
+    fetchLogs();
+  }
+}
+
+async function fetchLogs(){
+  const logs=await api('logs');
+  if(logs)updateLogs(logs);
+}
+
+async function init(){const cfg=await api('config');if(cfg)loadConfig(cfg);startPolling((cfg&&cfg.poll_interval)||2)}
+init();
+</script>
+</body>
+</html>

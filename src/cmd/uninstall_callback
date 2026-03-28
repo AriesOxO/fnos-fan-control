@@ -1,0 +1,6 @@
+#!/bin/bash
+# 卸载后执行：清理配置
+
+rm -f /etc/modules-load.d/fan-control.conf 2>/dev/null
+
+exit 0

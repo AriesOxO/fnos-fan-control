@@ -1,0 +1,6 @@
+#!/bin/bash
+# 安装前执行：加载 drivetemp 内核模块
+
+/sbin/modprobe drivetemp 2>/dev/null || true
+
+exit 0
