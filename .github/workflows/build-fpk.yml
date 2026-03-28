@@ -1,0 +1,89 @@
+name: Build FPK
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (如 1.0.0)'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=$(grep "^version" src/manifest | sed 's/.*=\s*//' | tr -d '[:space:]')
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "版本: $VERSION"
+
+      - name: Build app.tgz
+        run: |
+          cd src/app
+          tar czf /tmp/app.tgz bin ui
+
+      - name: Calculate checksum
+        id: checksum
+        run: |
+          CHECKSUM=$(md5sum /tmp/app.tgz | awk '{print $1}')
+          echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
+          echo "Checksum: $CHECKSUM"
+
+      - name: Prepare FPK structure
+        run: |
+          BUILD_DIR=/tmp/fpk-build
+          mkdir -p $BUILD_DIR
+
+          # 复制文件
+          cp /tmp/app.tgz $BUILD_DIR/
+          cp -r src/cmd $BUILD_DIR/
+          cp -r src/config $BUILD_DIR/
+          cp -r src/wizard $BUILD_DIR/
+          cp src/ICON.PNG $BUILD_DIR/
+          cp src/ICON_256.PNG $BUILD_DIR/
+
+          # 生成 manifest（写入版本和 checksum）
+          sed -e "s/^version.*=.*/version               = ${{ steps.version.outputs.version }}/" \
+              -e "s/^checksum.*=.*/checksum              = ${{ steps.checksum.outputs.checksum }}/" \
+              src/manifest > $BUILD_DIR/manifest
+
+          # 确保脚本有执行权限
+          chmod +x $BUILD_DIR/cmd/*
+
+          echo "=== FPK 内容 ==="
+          ls -la $BUILD_DIR/
+          echo "=== Manifest ==="
+          cat $BUILD_DIR/manifest
+
+      - name: Package FPK
+        run: |
+          cd /tmp/fpk-build
+          tar czf /tmp/fan-control-${{ steps.version.outputs.version }}.fpk \
+            app.tgz cmd config wizard manifest ICON.PNG ICON_256.PNG
+          echo "=== FPK 大小 ==="
+          du -h /tmp/fan-control-${{ steps.version.outputs.version }}.fpk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fan-control-${{ steps.version.outputs.version }}.fpk
+          path: /tmp/fan-control-${{ steps.version.outputs.version }}.fpk
+
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: /tmp/fan-control-${{ steps.version.outputs.version }}.fpk

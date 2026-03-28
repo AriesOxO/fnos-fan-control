@@ -1,0 +1,19 @@
+{
+    ".url": {
+        "fan-control.Application": {
+            "title": "风扇控制器",
+            "desc": "风扇控制器",
+            "icon": "images/icon_{0}.png",
+            "type": "url",
+            "protocol": "http",
+            "port": "${port}",
+            "url": "${path}",
+            "allUsers": false,
+            "control": {
+                "accessPerm": "editable",
+                "portPerm": "editable",
+                "pathPerm": "editable"
+            }
+        }
+    }
+}
