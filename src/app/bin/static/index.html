@@ -590,8 +590,14 @@ async function clearLogs(){
 
 function toggleCollapse(el){
   el.classList.toggle('open');
-  const body=el.nextElementSibling;
-  body.classList.toggle('open');
+  // 找到对应的 collapse-body：可能是兄弟节点，也可能是父节点的兄弟
+  let body=el.nextElementSibling;
+  if(!body||!body.classList.contains('collapse-body')){
+    body=el.parentElement.nextElementSibling;
+  }
+  if(body&&body.classList.contains('collapse-body')){
+    body.classList.toggle('open');
+  }
   // 日志面板展开时立即拉取
   if(el.classList.contains('open')&&el.closest('.log-header')){
     fetchLogs();
