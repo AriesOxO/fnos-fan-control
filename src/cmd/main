@@ -3,6 +3,12 @@
 # 风扇控制器 — FPK 生命周期管理脚本
 # 职责：start / stop / status + 看门狗进程
 
+# 环境变量检查
+if [ -z "$TRIM_PKGVAR" ] || [ -z "$TRIM_APPDEST" ]; then
+    echo "错误: TRIM_PKGVAR 或 TRIM_APPDEST 环境变量未设置" >&2
+    exit 1
+fi
+
 LOG_FILE="${TRIM_PKGVAR}/info.log"
 PID_FILE="${TRIM_PKGVAR}/app.pid"
 WATCHDOG_PID_FILE="${TRIM_PKGVAR}/watchdog.pid"

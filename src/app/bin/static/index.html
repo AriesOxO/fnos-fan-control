@@ -418,6 +418,7 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
 
 <script>
 let config={},pollTimer=null,hwDetected=true,connected=true,currentTemp=null;
+let baseInterval=2,currentInterval=2,maxInterval=30;
 let multiZone=false; // 多区域模式标记
 const DEFAULT_CURVE=[{temp:30,pwm_percent:20},{temp:40,pwm_percent:30},{temp:50,pwm_percent:45},{temp:60,pwm_percent:65},{temp:70,pwm_percent:85},{temp:80,pwm_percent:100}];
 const MODE_NAMES={default:'默认模式',auto:'自动模式',manual:'手动模式',full:'全速模式'};
@@ -433,9 +434,15 @@ async function api(path,method='GET',body=null){
     const opts={method,headers:{}};
     if(body){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}
     const r=await fetch('/api/'+path,opts);const d=await r.json();
-    if(!connected){connected=true;updateConnectionStatus()}
+    if(!connected){connected=true;currentInterval=baseInterval;startPolling(baseInterval);updateConnectionStatus()}
     return d;
-  }catch(e){if(connected){connected=false;updateConnectionStatus()}return null}
+  }catch(e){
+    if(connected){connected=false;updateConnectionStatus()}
+    // 指数退避
+    currentInterval=Math.min(currentInterval*2,maxInterval);
+    startPolling(currentInterval);
+    return null;
+  }
 }
 
 function startPolling(interval){
@@ -731,7 +738,9 @@ function updateLogs(logs){
   logs.slice().reverse().forEach(l=>{
     const div=document.createElement('div');div.className='log-item';
     const level=l.level||'info';
-    div.innerHTML='<span class="log-time">'+(l.time||'')+'</span><span class="log-badge '+level+'">'+level+'</span><span class="log-msg">'+(l.message||'')+'</span>';
+    div.innerHTML='<span class="log-time"></span><span class="log-badge '+level+'">'+level+'</span><span class="log-msg"></span>';
+    div.querySelector('.log-time').textContent=l.time||'';
+    div.querySelector('.log-msg').textContent=l.message||'';
     body.appendChild(div);
   });
 }
@@ -760,7 +769,7 @@ async function fetchLogs(){
   if(logs)updateLogs(logs);
 }
 
-async function init(){const cfg=await api('config');if(cfg)loadConfig(cfg);startPolling((cfg&&cfg.poll_interval)||2)}
+async function init(){const cfg=await api('config');if(cfg)loadConfig(cfg);baseInterval=(cfg&&cfg.poll_interval)||2;currentInterval=baseInterval;startPolling(baseInterval)}
 init();
 </script>
 </body>

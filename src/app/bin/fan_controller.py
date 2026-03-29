@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 LOG_BUFFER_SIZE = 100
 
+# 温度读取失败阈值
+TEMP_FULL_SPEED_THRESHOLD = 3   # 连续失败 N 次后全速保护
+TEMP_DEGRADE_THRESHOLD = 5      # 连续失败 N 次后降级到默认模式
+MAX_PWM_WRITE_FAILURES = 3      # PWM 写入连续失败 N 次后降级
+
 
 class FanController(threading.Thread):
     """风扇控制守护线程，遍历所有区域执行控制周期"""
@@ -49,7 +54,6 @@ class FanController(threading.Thread):
         self._zone_states: dict[str, dict] = {}
         self._degraded_zones: set[str] = set()
         self._write_fail_counts: dict[str, int] = {}
-        self._max_write_failures: int = 3
 
     def run(self):
         """主控制循环"""
@@ -66,7 +70,7 @@ class FanController(threading.Thread):
         zone_desc = ", ".join(
             "{}({})".format(z["name"], "+".join(z["channels"])) for z in zones
         )
-        self._add_log("info", "服务启动，{} 个区域: {}".format(len(zones), zone_desc))
+        self.add_log("info", "服务启动，{} 个区域: {}".format(len(zones), zone_desc))
 
         while not self._stop_event.is_set():
             try:
@@ -75,7 +79,7 @@ class FanController(threading.Thread):
                 self._control_all_zones(normalized)
             except Exception as e:
                 logger.error("控制循环异常: %s", e)
-                self._add_log("error", "控制循环异常: {}".format(e))
+                self.add_log("error", "控制循环异常: {}".format(e))
 
             poll_interval = config.get("poll_interval", 2)
             self._mode_changed.wait(timeout=poll_interval)
@@ -87,6 +91,24 @@ class FanController(threading.Thread):
         """遍历所有区域执行控制周期（单线程，一次读温多次写 PWM）"""
         cpu_temp = self._hw.read_cpu_temp()
         disk_temps = self._hw.read_disk_temps()
+
+        # 温度读取失败检测（全局，影响所有区域）
+        if self._hw.is_read_failure_critical:
+            fail_count = self._hw.read_fail_count
+            if fail_count >= TEMP_DEGRADE_THRESHOLD:
+                # 连续失败超过降级阈值，所有区域降级
+                for zone in config["zones"]:
+                    self._degrade_zone(zone, "温度连续读取失败 {} 次".format(fail_count))
+                return
+            # 连续失败达到全速阈值但未降级，所有区域全速保护
+            msg = "温度读取连续失败 {} 次，全速保护".format(fail_count)
+            logger.warning(msg)
+            self.add_log("warn", msg)
+            for zone in config["zones"]:
+                for ch in zone["channels"]:
+                    self._hw.write_pwm(255, ch, min_percent=0)
+                self._update_zone_status(zone, cpu_temp, disk_temps, 255)
+            return
 
         for zone in config["zones"]:
             self._control_zone(zone, cpu_temp, disk_temps)
@@ -108,25 +130,12 @@ class FanController(threading.Thread):
                     "区域 '%s' %s pwm_enable=%s，修正为 %d",
                     zone["name"], ch, current_enable, PWM_ENABLE_MANUAL,
                 )
-                self._add_log("warn", "区域 {} pwm_enable 自动修正".format(zone["name"]))
+                self.add_log("warn", "区域 {} pwm_enable 自动修正".format(zone["name"]))
                 if not self._hw.set_pwm_mode(PWM_ENABLE_MANUAL, ch):
                     self._degrade_zone(zone, "无法恢复 PWM 手动模式")
                     return
 
-        # 3. 温度读取临界检测
-        if self._hw.is_read_failure_critical:
-            if self._hw.read_fail_count >= 5:
-                self._degrade_zone(zone, "温度连续读取失败 5 次")
-                return
-            msg = "温度读取连续失败 {} 次，全速保护".format(self._hw.read_fail_count)
-            logger.warning(msg)
-            self._add_log("warn", msg)
-            for ch in channels:
-                self._hw.write_pwm(255, ch, min_percent=0)
-            self._update_zone_status(zone, cpu_temp, disk_temps, 255)
-            return
-
-        # 4. 计算目标 PWM
+        # 3. 计算目标 PWM（温度失败检测已在 _control_all_zones 统一处理）
         target_pwm = self._calculate_target_pwm(mode, effective_temp, zone)
 
         # 5. 写入所有绑定通道
@@ -136,9 +145,9 @@ class FanController(threading.Thread):
                 if not ok:
                     count = self._write_fail_counts.get(zone_id, 0) + 1
                     self._write_fail_counts[zone_id] = count
-                    self._add_log("warn", "区域 {} PWM 写入失败 (连续 {} 次)".format(
+                    self.add_log("warn", "区域 {} PWM 写入失败 (连续 {} 次)".format(
                         zone["name"], count))
-                    if count >= self._max_write_failures:
+                    if count >= MAX_PWM_WRITE_FAILURES:
                         self._degrade_zone(zone, "PWM 连续写入失败 {} 次".format(count))
                         return
                 else:
@@ -194,6 +203,8 @@ class FanController(threading.Thread):
             t1, p1 = curve[i]["temp"], curve[i]["pwm_percent"]
             t2, p2 = curve[i + 1]["temp"], curve[i + 1]["pwm_percent"]
             if t1 <= temp <= t2:
+                if t2 == t1:
+                    return int(255 * p1 / 100)
                 ratio = (temp - t1) / (t2 - t1)
                 pwm_percent = p1 + (p2 - p1) * ratio
                 return int(255 * pwm_percent / 100)
@@ -210,7 +221,7 @@ class FanController(threading.Thread):
             self._degraded_zones.add(zone_id)
             self._write_fail_counts[zone_id] = 0
 
-        self._add_log("error", "区域 {} 降级: {}".format(zone["name"], reason))
+        self.add_log("error", "区域 {} 降级: {}".format(zone["name"], reason))
         self._cfg.update_zone(zone_id, {"mode": "default"})
 
     def _update_zone_status(self, zone: dict, cpu_temp, disk_temps, pwm_value):
@@ -235,8 +246,8 @@ class FanController(threading.Thread):
         with self._lock:
             self._zone_states[zone_id] = zone_status
 
-    def _add_log(self, level, message):
-        """记录事件日志（仅操作、告警、错误）"""
+    def add_log(self, level, message):
+        """记录事件日志（操作、告警、错误）"""
         entry = {
             "time": time.strftime("%m-%d %H:%M:%S"),
             "level": level,
@@ -272,6 +283,10 @@ class FanController(threading.Thread):
                 logger.warning("区域 %s 不存在", zone_id)
                 return False
 
+        # 一次性读取温度（所有区域共享）
+        cpu_temp = self._hw.read_cpu_temp()
+        disk_temps = self._hw.read_disk_temps()
+
         for zone in target_zones:
             # 设置 pwm_enable=1
             for ch in zone["channels"]:
@@ -280,8 +295,6 @@ class FanController(threading.Thread):
                     return False
 
             # 立即写入对应 PWM
-            cpu_temp = self._hw.read_cpu_temp()
-            disk_temps = self._hw.read_disk_temps()
             effective_temp = self._get_effective_temp(
                 cpu_temp, disk_temps, zone["temp_source"])
 
@@ -313,7 +326,7 @@ class FanController(threading.Thread):
 
         names = {"default": "默认模式", "auto": "自动模式", "manual": "手动模式", "full": "全速模式"}
         scope = "区域 {}".format(zone_id) if zone_id else "所有区域"
-        self._add_log("info", "{} 切换到{}".format(scope, names.get(mode, mode)))
+        self.add_log("info", "{} 切换到{}".format(scope, names.get(mode, mode)))
         logger.info("%s 切换到 %s", scope, mode)
 
         self._mode_changed.set()

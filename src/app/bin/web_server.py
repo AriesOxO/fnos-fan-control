@@ -19,6 +19,7 @@ import json
 import logging
 import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,9 @@ class FanControlHandler(BaseHTTPRequestHandler):
         try:
             if self.path == "/" or self.path == "/index.html":
                 self._serve_static()
+            elif self.path == "/favicon.ico":
+                self.send_response(204)
+                self.end_headers()
             elif self.path == "/api/status":
                 self._json_response(self.server.fan_controller.get_status())
             elif self.path == "/api/config":
@@ -77,6 +81,12 @@ class FanControlHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            # 无 body 端点
+            if self.path == "/api/logs/clear":
+                self.server.fan_controller.clear_logs()
+                self._json_response({"ok": True, "message": "日志已清空"})
+                return
+
             # 检查 body 大小
             content_length = int(self.headers.get("Content-Length", 0))
             if content_length > MAX_POST_BODY:
@@ -102,9 +112,6 @@ class FanControlHandler(BaseHTTPRequestHandler):
                 self._handle_config_update(data)
             elif self.path == "/api/mode":
                 self._handle_mode_switch(data)
-            elif self.path == "/api/logs/clear":
-                self.server.fan_controller.clear_logs()
-                self._json_response({"ok": True, "message": "日志已清空"})
             elif self.path == "/api/curve/generate":
                 self._handle_curve_generate(data)
             elif self.path.startswith("/api/zones/") and self.path.endswith("/mode"):
@@ -129,7 +136,7 @@ class FanControlHandler(BaseHTTPRequestHandler):
         updated = self.server.config_manager.update(data)
         changed = [k for k in data if k not in ("mode", "web_port")]
         if changed:
-            self.server.fan_controller._add_log("info", "配置更新: " + ", ".join(changed))
+            self.server.fan_controller.add_log("info", "配置更新: " + ", ".join(changed))
         self._json_response({"ok": True, "config": updated})
 
     def _handle_mode_switch(self, data: dict):
@@ -167,7 +174,7 @@ class FanControlHandler(BaseHTTPRequestHandler):
 
         result = self.server.config_manager.update_zone(zone_id, data)
         if result is not None:
-            self.server.fan_controller._add_log(
+            self.server.fan_controller.add_log(
                 "info", "区域 {} 配置更新: {}".format(zone_id, ", ".join(data.keys()))
             )
             self._json_response({"ok": True, "zone": result})
@@ -203,12 +210,12 @@ class FanControlHandler(BaseHTTPRequestHandler):
 
         try:
             with open(index_path, "r", encoding="utf-8") as f:
-                content = f.read()
+                content_bytes = f.read().encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(content.encode("utf-8"))))
+            self.send_header("Content-Length", str(len(content_bytes)))
             self.end_headers()
-            self.wfile.write(content.encode("utf-8"))
+            self.wfile.write(content_bytes)
         except FileNotFoundError:
             self._error_response(404, "index.html not found")
 
@@ -226,7 +233,8 @@ class FanControlHandler(BaseHTTPRequestHandler):
         self._json_response({"ok": False, "error": message}, status_code)
 
 
-class FanControlHTTPServer(HTTPServer):
+class FanControlHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
     """扩展 HTTPServer，持有 fan_controller、config_manager 和 hardware 引用"""
 
     def __init__(self, bind_address: str, port: int, fan_controller, config_manager, hardware=None):
