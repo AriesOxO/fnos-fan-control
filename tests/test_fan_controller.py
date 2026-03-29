@@ -33,7 +33,8 @@ class MockHardware(Hardware):
             "pwm_channels": ["pwm1", "pwm2"],
             "fan_inputs": {"pwm2": "/mock/fan2"},
         }]
-        self.coretemp_base = "/mock/coretemp"
+        self.cpu_temp_base = "/mock/coretemp"
+        self.cpu_temp_driver = "coretemp"
         self.available_pwm = ["pwm1", "pwm2"]
         self.available_fans = {"pwm2": "/mock/fan2"}
         self._write_history = []

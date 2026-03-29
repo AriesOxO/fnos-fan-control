@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "app", "bin"))
 
-from hardware import Hardware, safe_pwm_value, ABSOLUTE_MIN_PWM, PWM_ENABLE_SAFE
+from hardware import Hardware, safe_pwm_value, ABSOLUTE_MIN_PWM, PWM_ENABLE_SAFE, CPU_TEMP_DRIVERS
 
 
 class TestSafePwmValue(unittest.TestCase):
@@ -116,7 +116,7 @@ class TestHardwareDetection(unittest.TestCase):
         self._create_hwmon("coretemp", 0, {"temp1_input": "47000"})
         self._create_hwmon("it8772", 1, {"pwm1": "128", "pwm1_enable": "2", "fan1_input": "2000"})
         self.hw.detect_hwmon_paths()
-        self.assertIsNotNone(self.hw.coretemp_base)
+        self.assertIsNotNone(self.hw.cpu_temp_base)
 
     def test_no_pwm_chip_returns_false(self):
         """无 PWM 芯片时返回 False"""
@@ -149,7 +149,7 @@ class TestHardwareDetection(unittest.TestCase):
         self.assertEqual(temp, 60.0)
 
     def test_read_fail_count(self):
-        self.hw.coretemp_base = "/nonexistent"
+        self.hw.cpu_temp_base = "/nonexistent"
         self.hw._last_valid_temp = 50.0
         for i in range(1, 4):
             self.hw.read_cpu_temp()
@@ -217,11 +217,11 @@ class TestHardwareDetection(unittest.TestCase):
         })
         self.hw.detect_hwmon_paths()
         self.hw.restore_safe_state()
-        # 验证两个芯片的 pwm_enable 都被恢复
         for chip in self.hw.chips:
             for ch in chip["pwm_channels"]:
-                enable = self.hw.read_pwm_enable(ch)
-                self.assertEqual(enable, PWM_ENABLE_SAFE)
+                enable_file = os.path.join(chip["hwmon_path"], f"{ch}_enable")
+                val = self.hw._read_int_file(enable_file)
+                self.assertEqual(val, PWM_ENABLE_SAFE)
 
     def test_hw_detected_property(self):
         """hw_detected 属性正确反映探测结果"""
@@ -240,16 +240,114 @@ class TestHardwareDetection(unittest.TestCase):
         self.assertEqual(info["chips"][0]["name"], "it8772")
         self.assertIn("cpu", info["temp_sensors"])
 
-    def test_find_chip_for_channel(self):
-        """通道路由正确"""
-        self._create_hwmon("it8772", 0, {"pwm1": "128", "fan1_input": "2000"})
-        self._create_hwmon("nct6776", 1, {"pwm1": "128", "fan1_input": "1500"})
+    # ── AMD CPU 温度测试 ──
+
+    def test_detect_k10temp(self):
+        """探测 AMD k10temp"""
+        self._create_hwmon("k10temp", 0, {"temp1_input": "55000"})
+        self._create_hwmon("it8772", 1, {"pwm1": "128", "fan1_input": "2000"})
         self.hw.detect_hwmon_paths()
-        # 两个芯片都有 pwm1，第一个芯片优先
-        chip = self.hw._find_chip_for_channel("pwm1")
-        self.assertEqual(chip["name"], "it8772")
-        # 不存在的通道返回 None
-        self.assertIsNone(self.hw._find_chip_for_channel("pwm99"))
+        self.assertIsNotNone(self.hw.cpu_temp_base)
+        self.assertEqual(self.hw.cpu_temp_driver, "k10temp")
+        self.assertEqual(self.hw.read_cpu_temp(), 55.0)
+
+    def test_detect_zenpower(self):
+        """探测 AMD zenpower"""
+        self._create_hwmon("zenpower", 0, {"temp1_input": "62000"})
+        self._create_hwmon("it8772", 1, {"pwm1": "128", "fan1_input": "2000"})
+        self.hw.detect_hwmon_paths()
+        self.assertEqual(self.hw.cpu_temp_driver, "zenpower")
+
+    def test_coretemp_priority_over_k10temp(self):
+        """Intel coretemp 优先级高于 AMD k10temp"""
+        self._create_hwmon("coretemp", 0, {"temp1_input": "50000"})
+        self._create_hwmon("k10temp", 1, {"temp1_input": "60000"})
+        self._create_hwmon("it8772", 2, {"pwm1": "128", "fan1_input": "2000"})
+        self.hw.detect_hwmon_paths()
+        self.assertEqual(self.hw.cpu_temp_driver, "coretemp")
+        self.assertEqual(self.hw.read_cpu_temp(), 50.0)
+
+    def test_no_cpu_temp_sensor(self):
+        """无 CPU 温度传感器时 cpu_temp_base 为 None"""
+        self._create_hwmon("it8772", 0, {"pwm1": "128", "fan1_input": "2000"})
+        self.hw.detect_hwmon_paths()
+        self.assertIsNone(self.hw.cpu_temp_base)
+        self.assertIsNone(self.hw.read_cpu_temp())
+
+    def test_cpu_temp_driver_in_info(self):
+        """get_hardware_info 返回正确的驱动名"""
+        self._create_hwmon("k10temp", 0, {"temp1_input": "55000"})
+        self._create_hwmon("it8772", 1, {"pwm1": "128", "fan1_input": "2000"})
+        self.hw.detect_hwmon_paths()
+        info = self.hw.get_hardware_info()
+        self.assertEqual(info["temp_sensors"]["cpu"]["type"], "k10temp")
+
+    # ── 多芯片通道冲突测试 ──
+
+    def test_multi_chip_channel_prefix(self):
+        """多芯片通道名冲突时加前缀"""
+        self._create_hwmon("it8772", 0, {
+            "pwm1": "128", "fan1_input": "2000",
+        })
+        self._create_hwmon("nct6776", 1, {
+            "pwm1": "200", "fan1_input": "1500",
+        })
+        self.hw.detect_hwmon_paths()
+        # 两个芯片都有 pwm1，应该加前缀
+        self.assertIn("chip0_pwm1", self.hw.available_pwm)
+        self.assertIn("chip1_pwm1", self.hw.available_pwm)
+        self.assertEqual(len(self.hw.available_pwm), 2)
+
+    def test_multi_chip_no_conflict_no_prefix(self):
+        """多芯片无冲突时不加前缀"""
+        self._create_hwmon("it8772", 0, {
+            "pwm1": "128", "fan1_input": "2000",
+        })
+        self._create_hwmon("nct6776", 1, {
+            "pwm2": "200", "fan2_input": "1500",
+        })
+        self.hw.detect_hwmon_paths()
+        # 无冲突，保持原名
+        self.assertIn("pwm1", self.hw.available_pwm)
+        self.assertIn("pwm2", self.hw.available_pwm)
+
+    def test_multi_chip_read_write_with_prefix(self):
+        """带前缀的通道能正确读写"""
+        self._create_hwmon("it8772", 0, {
+            "pwm1": "100", "pwm1_enable": "1", "fan1_input": "2000",
+        })
+        self._create_hwmon("nct6776", 1, {
+            "pwm1": "200", "pwm1_enable": "2", "fan1_input": "1500",
+        })
+        self.hw.detect_hwmon_paths()
+        # 读取各自芯片的值
+        self.assertEqual(self.hw.read_pwm("chip0_pwm1"), 100)
+        self.assertEqual(self.hw.read_pwm("chip1_pwm1"), 200)
+        self.assertEqual(self.hw.read_pwm_enable("chip0_pwm1"), 1)
+        self.assertEqual(self.hw.read_pwm_enable("chip1_pwm1"), 2)
+        # 写入
+        self.hw.write_pwm(150, "chip0_pwm1", min_percent=10)
+        self.assertEqual(self.hw.read_pwm("chip0_pwm1"), 150)
+        self.assertEqual(self.hw.read_pwm("chip1_pwm1"), 200)  # 不受影响
+
+    def test_single_chip_no_prefix(self):
+        """单芯片始终不加前缀"""
+        self._create_hwmon("it8772", 0, {
+            "pwm1": "128", "pwm2": "200",
+            "fan1_input": "0", "fan2_input": "3000",
+        })
+        self.hw.detect_hwmon_paths()
+        self.assertIn("pwm1", self.hw.available_pwm)
+        self.assertIn("pwm2", self.hw.available_pwm)
+        self.assertNotIn("chip0_pwm1", self.hw.available_pwm)
+
+    def test_find_chip_nonexistent(self):
+        """查找不存在的通道返回 (None, None)"""
+        self._create_hwmon("it8772", 0, {"pwm1": "128", "fan1_input": "2000"})
+        self.hw.detect_hwmon_paths()
+        chip, local = self.hw._find_chip_for_channel("pwm99")
+        self.assertIsNone(chip)
+        self.assertIsNone(local)
 
 
 if __name__ == "__main__":

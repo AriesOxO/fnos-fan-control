@@ -30,11 +30,23 @@ PWM_ENABLE_SAFE = 2     # 安全恢复：归还芯片自动控制
 CHIP_DISPLAY_NAMES = {
     "it8772": "ITE IT8772E",
     "it8786": "ITE IT8786E",
+    "it8688": "ITE IT8688E",
     "nct6776": "Nuvoton NCT6776",
     "nct6687": "Nuvoton NCT6687",
     "nct6775": "Nuvoton NCT6775",
+    "nct6779": "Nuvoton NCT6779",
+    "nct6798": "Nuvoton NCT6798",
     "f71882fg": "Fintek F71882FG",
+    "f71868a": "Fintek F71868A",
 }
+
+# CPU 温度传感器驱动名（按优先级排列）
+CPU_TEMP_DRIVERS = [
+    "coretemp",     # Intel
+    "k10temp",      # AMD (Zen/Zen2/Zen3/Zen4)
+    "zenpower",     # AMD（第三方驱动）
+    "cpu_thermal",  # ARM / 通用 thermal
+]
 
 
 def safe_pwm_value(target: int, min_percent: int) -> int:
@@ -71,7 +83,8 @@ class Hardware:
         self.chips: list[dict] = []
 
         # 温度传感器路径
-        self.coretemp_base: str | None = None
+        self.cpu_temp_base: str | None = None     # CPU 温度 hwmon 路径
+        self.cpu_temp_driver: str | None = None    # CPU 温度驱动名
         self.drivetemp_paths: dict[str, str] = {}  # {"sda": "/sys/.../temp1_input"}
 
         # 汇总所有芯片的通道（方便外部访问）
@@ -98,7 +111,8 @@ class Hardware:
             False 表示未找到 PWM 芯片，仅温度监控
         """
         self.chips = []
-        self.coretemp_base = None
+        self.cpu_temp_base = None
+        self.cpu_temp_driver = None
         self.drivetemp_paths = {}
         self.available_pwm = []
         self.available_fans = {}
@@ -111,10 +125,15 @@ class Hardware:
             if name is None:
                 continue
 
-            # 温度传感器探测
-            if name == "coretemp":
-                self.coretemp_base = hwmon_dir
-                logger.info("探测到 coretemp: %s", hwmon_dir)
+            # CPU 温度传感器探测（支持 Intel coretemp、AMD k10temp 等）
+            if name in CPU_TEMP_DRIVERS:
+                # 优先级：按 CPU_TEMP_DRIVERS 列表顺序，已有则跳过低优先级
+                if self.cpu_temp_base is None:
+                    temp_file = os.path.join(hwmon_dir, "temp1_input")
+                    if os.path.exists(temp_file):
+                        self.cpu_temp_base = hwmon_dir
+                        self.cpu_temp_driver = name
+                        logger.info("探测到 CPU 温度传感器: %s (%s)", name, hwmon_dir)
                 continue
 
             if name == "drivetemp":
@@ -145,8 +164,12 @@ class Hardware:
             logger.warning("未探测到 PWM 控制芯片，无法接管风扇控制")
             return False
 
-        if self.coretemp_base is None:
-            logger.warning("未探测到 coretemp，CPU 温度不可用")
+        # 汇总通道名，多芯片时加前缀避免冲突
+        self._build_channel_index()
+
+        if self.cpu_temp_base is None:
+            logger.warning("未探测到 CPU 温度传感器（支持: %s），CPU 温度不可用",
+                          ", ".join(CPU_TEMP_DRIVERS))
 
         logger.info(
             "硬件探测完成: 芯片=%d, PWM 通道=%s, 硬盘温度=%s",
@@ -154,6 +177,44 @@ class Hardware:
             list(self.drivetemp_paths.keys()),
         )
         return True
+
+    def _build_channel_index(self):
+        """构建全局通道索引，多芯片时加前缀避免冲突
+
+        单芯片：pwm1, pwm2（保持简洁）
+        多芯片：chip0_pwm1, chip0_pwm2, chip1_pwm1（加前缀）
+        """
+        self.available_pwm = []
+        self.available_fans = {}
+
+        need_prefix = len(self.chips) > 1
+
+        # 检查是否真的有通道名冲突
+        if need_prefix:
+            all_channels = []
+            for chip in self.chips:
+                all_channels.extend(chip["pwm_channels"])
+            has_conflict = len(all_channels) != len(set(all_channels))
+            need_prefix = has_conflict
+
+        for idx, chip in enumerate(self.chips):
+            prefix = f"chip{idx}_" if need_prefix else ""
+            mapped_channels = []
+            mapped_fans = {}
+
+            for ch in chip["pwm_channels"]:
+                global_name = prefix + ch
+                mapped_channels.append(global_name)
+
+                if ch in chip["fan_inputs"]:
+                    mapped_fans[global_name] = chip["fan_inputs"][ch]
+
+            # 更新芯片信息中的全局通道名
+            chip["global_pwm_channels"] = mapped_channels
+            chip["global_fan_inputs"] = mapped_fans
+
+            self.available_pwm.extend(mapped_channels)
+            self.available_fans.update(mapped_fans)
 
     def _detect_pwm_channels(self, hwmon_dir: str) -> tuple[list[str], dict[str, str]]:
         """扫描 hwmon 目录下可用的 PWM 和风扇通道
@@ -207,12 +268,27 @@ class Hardware:
 
     # ── 芯片路由 ─────────────────────────────────────────────
 
-    def _find_chip_for_channel(self, channel: str) -> dict | None:
-        """根据 PWM 通道名找到所属芯片信息"""
+    def _find_chip_for_channel(self, channel: str) -> tuple[dict, str] | tuple[None, None]:
+        """根据全局通道名找到所属芯片和本地通道名
+
+        Args:
+            channel: 全局通道名（如 "pwm2" 或 "chip0_pwm2"）
+
+        Returns:
+            (chip_info, local_channel) 或 (None, None)
+        """
         for chip in self.chips:
+            # 匹配全局名
+            global_channels = chip.get("global_pwm_channels", chip["pwm_channels"])
+            for i, gch in enumerate(global_channels):
+                if gch == channel:
+                    return chip, chip["pwm_channels"][i]
+
+            # 兼容直接匹配本地名（单芯片时）
             if channel in chip["pwm_channels"]:
-                return chip
-        return None
+                return chip, channel
+
+        return None, None
 
     # ── 温度读取 ─────────────────────────────────────────────
 
@@ -223,10 +299,10 @@ class Hardware:
             摄氏度浮点数，异常时返回上次有效值，
             传感器路径不存在返回 None
         """
-        if self.coretemp_base is None:
+        if self.cpu_temp_base is None:
             return None
 
-        temp_file = os.path.join(self.coretemp_base, "temp1_input")
+        temp_file = os.path.join(self.cpu_temp_base, "temp1_input")
         raw = self._read_int_file(temp_file)
 
         if raw is None:
@@ -270,18 +346,18 @@ class Hardware:
 
     def read_pwm(self, channel: str = "pwm2") -> int | None:
         """读取指定 PWM 通道的当前值 (0-255)"""
-        chip = self._find_chip_for_channel(channel)
+        chip, local_ch = self._find_chip_for_channel(channel)
         if chip is None:
             return None
-        pwm_file = os.path.join(chip["hwmon_path"], channel)
+        pwm_file = os.path.join(chip["hwmon_path"], local_ch)
         return self._read_int_file(pwm_file)
 
     def read_pwm_enable(self, channel: str = "pwm2") -> int | None:
         """读取指定 PWM 通道的控制模式"""
-        chip = self._find_chip_for_channel(channel)
+        chip, local_ch = self._find_chip_for_channel(channel)
         if chip is None:
             return None
-        enable_file = os.path.join(chip["hwmon_path"], f"{channel}_enable")
+        enable_file = os.path.join(chip["hwmon_path"], f"{local_ch}_enable")
         return self._read_int_file(enable_file)
 
     @property
@@ -311,13 +387,13 @@ class Hardware:
         Returns:
             True 写入成功，False 写入失败
         """
-        chip = self._find_chip_for_channel(channel)
+        chip, local_ch = self._find_chip_for_channel(channel)
         if chip is None:
             logger.error("通道 %s 无对应芯片，无法写入 PWM", channel)
             return False
 
         safe_value = safe_pwm_value(value, min_percent)
-        pwm_file = os.path.join(chip["hwmon_path"], channel)
+        pwm_file = os.path.join(chip["hwmon_path"], local_ch)
         return self._write_file(pwm_file, str(safe_value))
 
     def set_pwm_mode(self, mode: int, channel: str = "pwm2") -> bool:
@@ -330,12 +406,12 @@ class Hardware:
         Returns:
             True 写入成功，False 写入失败
         """
-        chip = self._find_chip_for_channel(channel)
+        chip, local_ch = self._find_chip_for_channel(channel)
         if chip is None:
             logger.error("通道 %s 无对应芯片，无法设置 PWM 模式", channel)
             return False
 
-        enable_file = os.path.join(chip["hwmon_path"], f"{channel}_enable")
+        enable_file = os.path.join(chip["hwmon_path"], f"{local_ch}_enable")
         return self._write_file(enable_file, str(mode))
 
     def restore_safe_state(self):
@@ -378,9 +454,9 @@ class Hardware:
             })
 
         temp_sensors = {}
-        if self.coretemp_base:
+        if self.cpu_temp_base:
             cpu_temp = self.read_cpu_temp()
-            temp_sensors["cpu"] = {"type": "coretemp", "current": cpu_temp}
+            temp_sensors["cpu"] = {"type": self.cpu_temp_driver, "current": cpu_temp}
         for disk_name, temp_file in self.drivetemp_paths.items():
             raw = self._read_int_file(temp_file)
             current = raw / 1000.0 if raw is not None else None
