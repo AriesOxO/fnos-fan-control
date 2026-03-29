@@ -5,7 +5,7 @@ Fan Controller for FlyNAS (fnOS) — FPK App with Universal hwmon Support
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-fnOS%20x86-green.svg)]()
 [![Python](https://img.shields.io/badge/Python-3.11%2B-yellow.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-112%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-120%20passed-brightgreen.svg)]()
 
 English | [简体中文](README.md)
 
@@ -17,6 +17,7 @@ English | [简体中文](README.md)
 - **Multi-zone Control** — Independent PWM channels, temp sources, and curves per zone
 - **Web Management UI** — Dark theme, real-time monitoring, responsive, event logging
 - **Multi-layer Safety** — Watchdog, degradation, pwm_enable self-healing, min speed protection (10%)
+- **Password Auth** — Optional password protection, Cookie + Header dual mode
 - **Zero Dependencies** — Python stdlib only, threaded HTTP, memory ≤ 15MB
 - **GitHub Actions** — Auto-build FPK on Release
 
@@ -51,6 +52,7 @@ Universal hwmon detection — any chip with `pwm` files can be controlled:
 1. Download latest `.fpk` from [Releases](https://github.com/AriesOxO/fnos-fan-control/releases)
 2. fnOS App Center → Manual Install → Upload
 3. Requires python312 (install from App Center first)
+4. Set access password during install (leave empty to disable auth)
 
 ### Option 2: Build from Source
 
@@ -98,6 +100,7 @@ bash /tmp/cleanup-fan-control.sh
 | pwm_enable self-heal | Verified and corrected every control cycle |
 | Watchdog | Restores safe state within 5s if process crashes |
 | Signal handling | SIGTERM graceful shutdown, SIGHUP config reload |
+| Access auth | Optional password, Cookie / Header dual mode |
 
 ## Project Structure
 
@@ -116,7 +119,7 @@ fnos-fan-control/
 │   ├── config/               # Privilege config
 │   ├── wizard/               # Install/config wizards
 │   └── manifest              # FPK metadata
-├── tests/                    # 112 unit + integration tests
+├── tests/                    # 120 unit + integration tests
 ├── scripts/                  # Build and cleanup scripts
 └── .github/workflows/        # CI auto-build
 ```
@@ -135,11 +138,13 @@ fnos-fan-control/
 | `/api/curve/generate` | POST | Auto-generate fan curve |
 | `/api/zones/{id}/mode` | POST | Switch zone-specific mode |
 | `/api/zones/{id}/config` | POST | Update zone-specific config |
+| `/api/auth/status` | GET | Auth status (enabled, authenticated) |
+| `/api/auth/login` | POST | Login (returns Cookie) |
 
 ## Testing
 
 ```bash
-python -m unittest discover -s tests -v  # 112 tests
+python -m unittest discover -s tests -v  # 120 tests
 ```
 
 ## Contributing

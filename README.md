@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-fnOS%20x86-green.svg)]()
 [![Python](https://img.shields.io/badge/Python-3.11%2B-yellow.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-112%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-120%20passed-brightgreen.svg)]()
 
 [English](README_EN.md) | 简体中文
 
@@ -17,6 +17,7 @@
 - **多风扇区域** — 每个区域独立绑定 PWM 通道、温度来源和温控曲线
 - **Web 管理界面** — 深色主题，实时监控，响应式布局，事件日志
 - **多层安全防护** — 看门狗、异常降级、pwm_enable 自愈、最低转速保护（10%）
+- **访问密码** — 可选密码认证，Cookie + Header 双模式，安装时配置
 - **零依赖** — 仅 Python 标准库，多线程 HTTP，内存 ≤ 15MB
 - **GitHub Actions** — Release 自动构建 FPK
 
@@ -51,6 +52,7 @@
 1. 从 [Releases](https://github.com/AriesOxO/fnos-fan-control/releases) 下载最新 `.fpk`
 2. 飞牛应用中心 → 手动安装 → 上传
 3. 依赖 python312（应用中心先安装）
+4. 安装向导中可设置访问密码（留空则不启用认证）
 
 ### 方式二：自行打包
 
@@ -99,6 +101,7 @@ bash /tmp/cleanup-fan-control.sh
 | pwm_enable 自愈 | 每个控制周期自动校验和修正 |
 | 看门狗 | 主进程崩溃后 5 秒内恢复安全状态 |
 | 信号处理 | SIGTERM 优雅退出，SIGHUP 热重载配置 |
+| 访问认证 | 可选密码保护，Cookie / Header 双模式 |
 
 ## 项目结构
 
@@ -117,7 +120,7 @@ fnos-fan-control/
 │   ├── config/               # 权限配置
 │   ├── wizard/               # 安装/配置向导
 │   └── manifest              # FPK 元数据
-├── tests/                    # 112 个单元测试 + 集成测试
+├── tests/                    # 120 个单元测试 + 集成测试
 ├── scripts/                  # 构建和清理脚本
 └── .github/workflows/        # CI 自动构建
 ```
@@ -136,19 +139,22 @@ fnos-fan-control/
 | `/api/curve/generate` | POST | 自动生成温控曲线 |
 | `/api/zones/{id}/mode` | POST | 切换指定区域模式 |
 | `/api/zones/{id}/config` | POST | 更新指定区域配置 |
+| `/api/auth/status` | GET | 认证状态（是否启用、是否已认证） |
+| `/api/auth/login` | POST | 登录（返回 Cookie） |
 
 ## 测试
 
 ```bash
-# 运行全部测试（112 个）
+# 运行全部测试（120 个）
 python -m unittest discover -s tests -v
 
 # 测试覆盖：
 # - 配置校验（25 个）：模式/曲线/范围/并发/损坏恢复
 # - 硬件抽象（30 个）：多芯片/AMD/Intel/label匹配/通道冲突
-# - 控制核心（25 个）：插值/模式切换/降级/全速保护/除零
+# - 控制核心（27 个）：插值/模式切换/降级/全速保护/除零
 # - Web API（20 个）：所有端点/输入校验/CORS/错误处理
-# - 多区域（12 个）：状态/模式切换/配置更新
+# - 认证（8 个）：密码启用/禁用/Cookie/Header/登录/401
+# - 多区域（10 个）：状态/模式切换/配置更新
 ```
 
 ## 贡献
