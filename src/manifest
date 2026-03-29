@@ -1,11 +1,11 @@
 appname               = fan-control
-version               = 1.0.1
-desc                  = 飞牛NAS 风扇控制器，支持自定义温控曲线、多种运行模式和 Web 管理界面。基于 IT8772 芯片，安全可靠。
+version               = 1.1.0
+desc                  = 飞牛NAS 风扇控制器，通用 hwmon 芯片支持，自定义温控曲线、多模式控制、多区域独立管理、Web 界面。
 platform              = x86
-maintainer            = zhangcheng
-maintainer_url        =
-distributor           = zhangcheng
-distributor_url       =
+maintainer            = AriesOxO
+maintainer_url        = https://github.com/AriesOxO/fnos-fan-control
+distributor           = AriesOxO
+distributor_url       = https://github.com/AriesOxO/fnos-fan-control
 os_min_ver            = 1.1.8
 display_name          = 风扇控制器
 desktop_appname       = fan-control.Application
