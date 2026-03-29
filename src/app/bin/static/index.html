@@ -134,6 +134,15 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
 .gen-sep{color:var(--text3)}
 .btn-sm{padding:5px 14px;font-size:12px}
 
+/* 曲线编辑区 */
+.curve-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.curve-edit-body{max-height:0;overflow:hidden;opacity:0;transition:max-height .35s ease,opacity .25s ease}
+.curve-edit-body.open{max-height:800px;opacity:1;padding-top:10px}
+.curve-summary{font-size:12px;color:var(--text2);padding:8px 12px;background:var(--bg2);border-radius:6px;margin-top:8px;transition:opacity .2s}
+.curve-summary.hidden{display:none}
+.curve-summary span{margin-right:12px;white-space:nowrap}
+.curve-summary .node-tag{display:inline-block;padding:2px 8px;background:var(--accent-glow);border-radius:4px;margin:2px 4px 2px 0;color:var(--accent);font-weight:600}
+
 /* ── 折叠 ── */
 .collapsible{cursor:pointer;user-select:none}
 .collapse-arrow{display:inline-block;transition:transform .25s ease;font-size:10px;color:var(--text3);margin-left:4px}
@@ -286,31 +295,39 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
 
   <!-- 温控曲线 -->
   <div class="section" id="curveSection" style="display:none">
-    <div class="section-title"><span class="s-icon">📊</span> 温控曲线</div>
+    <div class="curve-header">
+      <div class="section-title" style="margin-bottom:0"><span class="s-icon">📊</span> 温控曲线</div>
+      <button class="btn btn-sm btn-secondary" id="curveEditBtn" onclick="toggleCurveEdit()">编辑曲线</button>
+    </div>
+    <!-- 曲线图始终显示 -->
     <div class="curve-container">
       <svg class="curve-svg" id="curveSvg" viewBox="0 0 420 220">
         <defs><linearGradient id="curveGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(0,180,216,.2)"/><stop offset="100%" stop-color="rgba(0,180,216,0)"/></linearGradient></defs>
       </svg>
     </div>
-    <!-- 自动生成 -->
-    <div class="curve-gen">
-      <div class="gen-row">
-        <span class="gen-label">自动生成</span>
-        <select id="genCount" class="gen-select"><option value="4">4 节点</option><option value="6" selected>6 节点</option><option value="8">8 节点</option><option value="10">10 节点</option></select>
-        <input type="number" id="genTempMin" class="gen-input" value="30" min="0" max="100" title="最低温度">
-        <span class="gen-sep">~</span>
-        <input type="number" id="genTempMax" class="gen-input" value="80" min="20" max="120" title="最高温度">
-        <span class="card-unit">°C</span>
-        <button class="btn btn-sm" onclick="generateCurve()">生成</button>
+    <!-- 节点摘要（编辑折叠时显示） -->
+    <div class="curve-summary" id="curveSummary"></div>
+    <!-- 编辑区域（默认折叠） -->
+    <div class="curve-edit-body" id="curveEditBody">
+      <div class="curve-gen">
+        <div class="gen-row">
+          <span class="gen-label">自动生成</span>
+          <select id="genCount" class="gen-select"><option value="4">4 节点</option><option value="6" selected>6 节点</option><option value="8">8 节点</option><option value="10">10 节点</option></select>
+          <input type="number" id="genTempMin" class="gen-input" value="30" min="0" max="100" title="最低温度">
+          <span class="gen-sep">~</span>
+          <input type="number" id="genTempMax" class="gen-input" value="80" min="20" max="120" title="最高温度">
+          <span class="card-unit">°C</span>
+          <button class="btn btn-sm" onclick="generateCurve()">生成</button>
+        </div>
       </div>
-    </div>
-    <div class="curve-inputs" id="curveInputs"></div>
-    <div class="btn-group">
-      <button class="btn btn-sm btn-secondary" onclick="addNode()">+ 添加节点</button>
-      <button class="btn btn-sm btn-secondary" onclick="removeNode()">- 删除末尾</button>
-      <div style="flex:1"></div>
-      <button class="btn" id="curveSaveBtn" onclick="saveCurve()">保存曲线</button>
-      <button class="btn btn-secondary" onclick="resetCurve()">恢复默认</button>
+      <div class="curve-inputs" id="curveInputs"></div>
+      <div class="btn-group">
+        <button class="btn btn-sm btn-secondary" onclick="addNode()">+ 添加节点</button>
+        <button class="btn btn-sm btn-secondary" onclick="removeNode()">- 删除末尾</button>
+        <div style="flex:1"></div>
+        <button class="btn" id="curveSaveBtn" onclick="saveCurve()">保存曲线</button>
+        <button class="btn btn-secondary" onclick="resetCurve()">恢复默认</button>
+      </div>
     </div>
   </div>
 
@@ -620,9 +637,37 @@ function drawCurve(){
 async function saveCurve(){
   if(!validateCurve())return;
   const r=await api('config','POST',{curve:curveData});
-  if(r&&r.ok)showToast('温控曲线已保存');else showToast('保存失败','fail');
+  if(r&&r.ok){showToast('温控曲线已保存');closeCurveEdit()}
+  else showToast('保存失败','fail');
 }
 function resetCurve(){curveData=JSON.parse(JSON.stringify(DEFAULT_CURVE));renderCurveInputs();showToast('已恢复默认曲线')}
+
+function toggleCurveEdit(){
+  const body=document.getElementById('curveEditBody');
+  const btn=document.getElementById('curveEditBtn');
+  const summary=document.getElementById('curveSummary');
+  const isOpen=body.classList.contains('open');
+  body.classList.toggle('open');
+  btn.textContent=isOpen?'编辑曲线':'收起编辑';
+  summary.classList.toggle('hidden',!isOpen);
+  if(!isOpen) updateCurveSummary();
+}
+
+function closeCurveEdit(){
+  const body=document.getElementById('curveEditBody');
+  const btn=document.getElementById('curveEditBtn');
+  const summary=document.getElementById('curveSummary');
+  body.classList.remove('open');
+  btn.textContent='编辑曲线';
+  summary.classList.remove('hidden');
+  updateCurveSummary();
+}
+
+function updateCurveSummary(){
+  const el=document.getElementById('curveSummary');
+  if(!curveData||!curveData.length){el.innerHTML='';return}
+  el.innerHTML=curveData.map(n=>`<span class="node-tag">${n.temp}°C → ${n.pwm_percent}%</span>`).join('');
+}
 
 async function generateCurve(){
   const count=parseInt(document.getElementById('genCount').value);
@@ -663,7 +708,7 @@ function loadConfig(cfg){
   document.getElementById('manualSlider').value=cfg.manual_pwm_percent||50;
   document.getElementById('manualSlider').min=Math.max(10,cfg.min_pwm_percent||10);
   document.getElementById('manualVal').textContent=(cfg.manual_pwm_percent||50)+'%';
-  if(cfg.curve)curveData=JSON.parse(JSON.stringify(cfg.curve));renderCurveInputs();
+  if(cfg.curve)curveData=JSON.parse(JSON.stringify(cfg.curve));renderCurveInputs();updateCurveSummary();
 }
 
 function updateAlerts(s){
