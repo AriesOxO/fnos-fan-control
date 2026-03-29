@@ -4,35 +4,30 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "飞牛NAS 风扇控制器"
+                "helpText": "飞牛NAS 风扇控制器 — 通用 hwmon 芯片支持"
             },
             {
                 "type": "tips",
-                "helpText": "支持自定义温控曲线、手动/自动/全速模式，提供 Web 管理界面。"
+                "helpText": "支持自定义温控曲线、手动/自动/全速模式，多区域独立管理。"
             },
             {
                 "type": "tips",
-                "helpText": "⚠️ 安装后默认为系统原始温控模式，不会干预风扇。"
+                "helpText": "⚠️ 安装后默认为保守温控模式，不会损害硬件。"
             },
             {
                 "type": "tips",
-                "helpText": "📌 如果重装时提示 [检查用户组失败]，请以 root 身份执行：bash /tmp/cleanup-fan-control.sh"
+                "helpText": "📌 重装失败时执行：bash /tmp/cleanup-fan-control.sh"
             }
         ]
     },
     {
-        "stepTitle": "端口配置",
+        "stepTitle": "访问配置",
         "items": [
-            {
-                "type": "tips",
-                "helpText": "设置 Web 管理界面的访问端口"
-            },
             {
                 "type": "text",
                 "field": "port",
-                "label": "访问端口",
+                "label": "管理端口",
                 "initValue": "9511",
-                "placeholder": "默认 9511",
                 "rules": [
                     {
                         "required": true,
@@ -41,8 +36,16 @@
                 ]
             },
             {
+                "type": "text",
+                "field": "wizard_password",
+                "label": "访问密码",
+                "initValue": "",
+                "placeholder": "留空则不启用认证",
+                "rules": []
+            },
+            {
                 "type": "tips",
-                "helpText": "安装完成后可在应用设置中修改端口和访问路径"
+                "helpText": "设置密码后，访问 Web 界面需要输入密码。留空则无需认证。"
             }
         ]
     }

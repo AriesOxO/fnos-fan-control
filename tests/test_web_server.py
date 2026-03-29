@@ -33,7 +33,7 @@ class TestWebAPI(unittest.TestCase):
         cls.fc = FanController(cls.hw, cls.cm)
         cls.fc.start()
         time.sleep(0.3)
-        cls.server = FanControlHTTPServer("127.0.0.1", cls.PORT, cls.fc, cls.cm, hardware=cls.hw)
+        cls.server = FanControlHTTPServer("127.0.0.1", cls.PORT, cls.fc, cls.cm, hardware=cls.hw, config_dir=cls.tmpdir)
         cls.server_thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.server_thread.start()
         time.sleep(0.5)
@@ -174,6 +174,93 @@ class TestWebAPI(unittest.TestCase):
         url = f"http://127.0.0.1:{self.PORT}/api/status"
         with urlopen(url, timeout=5) as resp:
             self.assertEqual(resp.headers.get("Access-Control-Allow-Origin"), "*")
+
+    # ── 认证 ──
+
+    def test_auth_status_no_password(self):
+        """无密码时 auth_enabled=false"""
+        data = self._get("/api/auth/status")
+        self.assertFalse(data["auth_enabled"])
+        self.assertTrue(data["authenticated"])
+
+
+class TestWebAPIAuth(unittest.TestCase):
+    """带密码的 Web API 认证测试"""
+
+    PORT = 19512
+
+    @classmethod
+    def setUpClass(cls):
+        cls.hw = MockHardware()
+        cls.tmpdir = tempfile.mkdtemp()
+        # 写入密码文件
+        with open(os.path.join(cls.tmpdir, "auth_token"), "w") as f:
+            f.write("test123")
+        cls.cm = ConfigManager(cls.tmpdir, available_pwm=["pwm2"])
+        cls.cm.load()
+        cls.fc = FanController(cls.hw, cls.cm)
+        cls.fc.start()
+        time.sleep(0.3)
+        cls.server = FanControlHTTPServer("127.0.0.1", cls.PORT, cls.fc, cls.cm,
+                                          hardware=cls.hw, config_dir=cls.tmpdir)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.server_thread.start()
+        time.sleep(0.5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.fc.stop()
+
+    def test_auth_status_enabled(self):
+        url = f"http://127.0.0.1:{self.PORT}/api/auth/status"
+        with urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read())
+        self.assertTrue(data["auth_enabled"])
+        self.assertFalse(data["authenticated"])
+
+    def test_api_returns_401_without_auth(self):
+        url = f"http://127.0.0.1:{self.PORT}/api/status"
+        with self.assertRaises(HTTPError) as ctx:
+            urlopen(url, timeout=5)
+        self.assertEqual(ctx.exception.code, 401)
+
+    def test_login_wrong_password(self):
+        url = f"http://127.0.0.1:{self.PORT}/api/auth/login"
+        body = json.dumps({"password": "wrong"}).encode()
+        req = Request(url, data=body, headers={"Content-Type": "application/json"})
+        with self.assertRaises(HTTPError) as ctx:
+            urlopen(req, timeout=5)
+        self.assertEqual(ctx.exception.code, 401)
+
+    def test_login_correct_password(self):
+        url = f"http://127.0.0.1:{self.PORT}/api/auth/login"
+        body = json.dumps({"password": "test123"}).encode()
+        req = Request(url, data=body, headers={"Content-Type": "application/json"})
+        with urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+            cookie = resp.headers.get("Set-Cookie", "")
+        self.assertTrue(data["ok"])
+        self.assertIn("fc_token=test123", cookie)
+
+    def test_api_with_cookie(self):
+        url = f"http://127.0.0.1:{self.PORT}/api/status"
+        req = Request(url, headers={"Cookie": "fc_token=test123"})
+        with urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        self.assertIn("cpu_temp", data)
+
+    def test_api_with_header_token(self):
+        url = f"http://127.0.0.1:{self.PORT}/api/status"
+        req = Request(url, headers={"X-Auth-Token": "test123"})
+        with urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        self.assertIn("cpu_temp", data)
+
+    def test_static_page_no_auth_needed(self):
+        url = f"http://127.0.0.1:{self.PORT}/"
+        with urlopen(url, timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
 
 
 if __name__ == "__main__":

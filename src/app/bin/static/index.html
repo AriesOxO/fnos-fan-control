@@ -173,6 +173,16 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
 .log-msg{color:var(--text2);flex:1;word-break:break-all}
 .log-empty{text-align:center;color:var(--text3);padding:24px;font-size:13px}
 
+/* 登录遮罩 */
+.login-overlay{position:fixed;inset:0;background:var(--bg);z-index:1000;display:flex;align-items:center;justify-content:center}
+.login-box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:32px;width:320px;text-align:center;box-shadow:0 8px 40px rgba(0,0,0,.5)}
+.login-box h2{font-size:18px;margin-bottom:6px}
+.login-box p{font-size:13px;color:var(--text2);margin-bottom:20px}
+.login-box input{width:100%;padding:10px 14px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:8px;color:var(--text);font-size:14px;text-align:center;margin-bottom:12px}
+.login-box input:focus{outline:none;border-color:var(--accent)}
+.login-box .btn{width:100%;padding:10px}
+.login-error{color:var(--danger);font-size:12px;margin-bottom:10px;min-height:16px}
+
 /* 使用说明 */
 .guide{font-size:13px;line-height:1.8}
 .guide-section{margin-bottom:16px}
@@ -216,8 +226,19 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
 </style>
 </head>
 <body>
+<!-- 登录遮罩（启用认证时显示） -->
+<div class="login-overlay" id="loginOverlay" style="display:none">
+  <div class="login-box">
+    <h2>风扇控制器</h2>
+    <p>请输入访问密码</p>
+    <div class="login-error" id="loginError"></div>
+    <input type="password" id="loginPassword" placeholder="密码" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn" onclick="doLogin()">登录</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
-<div class="container">
+<div class="container" id="mainContainer">
   <!-- 顶部 -->
   <div class="header">
     <div class="header-left">
@@ -774,7 +795,30 @@ async function fetchLogs(){
   if(logs)updateLogs(logs);
 }
 
-async function init(){const cfg=await api('config');if(cfg)loadConfig(cfg);baseInterval=(cfg&&cfg.poll_interval)||2;currentInterval=baseInterval;startPolling(baseInterval)}
+async function doLogin(){
+  const pw=document.getElementById('loginPassword').value;
+  try{
+    const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+    const d=await r.json();
+    if(d.ok){document.getElementById('loginOverlay').style.display='none';startApp()}
+    else{document.getElementById('loginError').textContent=d.error||'密码错误'}
+  }catch(e){document.getElementById('loginError').textContent='连接失败'}
+}
+
+async function startApp(){
+  const cfg=await api('config');if(cfg)loadConfig(cfg);
+  baseInterval=(cfg&&cfg.poll_interval)||2;currentInterval=baseInterval;startPolling(baseInterval);
+}
+
+async function init(){
+  try{
+    const r=await fetch('/api/auth/status');const d=await r.json();
+    if(d.auth_enabled&&!d.authenticated){
+      document.getElementById('loginOverlay').style.display='flex';
+      document.getElementById('loginPassword').focus();
+    }else{startApp()}
+  }catch(e){startApp()}
+}
 init();
 </script>
 </body>

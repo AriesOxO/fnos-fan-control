@@ -20,6 +20,13 @@ echo "清理完成，可以重新安装。"
 CLEANUP
 chmod +x /tmp/cleanup-fan-control.sh
 
+# 保存安装向导中的密码到配置文件
+if [ -n "${wizard_password}" ] && [ -n "${TRIM_PKGETC}" ]; then
+    AUTH_FILE="${TRIM_PKGETC}/auth_token"
+    echo "${wizard_password}" > "$AUTH_FILE" 2>/dev/null
+    chmod 600 "$AUTH_FILE" 2>/dev/null
+fi
+
 # 配置 drivetemp 开机自动加载
 MODULES_FILE="/etc/modules-load.d/fan-control.conf"
 if [ ! -f "$MODULES_FILE" ]; then

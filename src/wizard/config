@@ -4,7 +4,7 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "📌 如需通过反向代理访问，请先配置好反代，再修改此处设置"
+                "helpText": "📌 如需反向代理访问，请先配置好反代再修改"
             },
             {
                 "type": "text",
@@ -28,6 +28,12 @@
                         "message": "访问路径不能为空"
                     }
                 ]
+            },
+            {
+                "type": "text",
+                "field": "wizard_password",
+                "label": "访问密码",
+                "placeholder": "留空则关闭认证"
             }
         ]
     }

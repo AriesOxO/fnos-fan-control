@@ -1,8 +1,19 @@
 #!/bin/bash
-# 配置变更后执行：通知主进程重载配置
+# 配置变更后执行：更新密码 + 通知主进程重载
 
+# 更新密码文件
+if [ -n "${TRIM_PKGETC}" ]; then
+    AUTH_FILE="${TRIM_PKGETC}/auth_token"
+    if [ -n "${wizard_password}" ]; then
+        echo "${wizard_password}" > "$AUTH_FILE" 2>/dev/null
+        chmod 600 "$AUTH_FILE" 2>/dev/null
+    else
+        rm -f "$AUTH_FILE" 2>/dev/null
+    fi
+fi
+
+# 通知主进程重载配置
 PID_FILE="${TRIM_PKGVAR}/app.pid"
-
 if [ -f "$PID_FILE" ]; then
     pid=$(head -n 1 "$PID_FILE" | tr -d '[:space:]')
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
