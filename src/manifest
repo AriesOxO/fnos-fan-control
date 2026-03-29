@@ -1,5 +1,5 @@
 appname               = fan-control
-version               = 1.0.0
+version               = 1.0.1
 desc                  = 飞牛NAS 风扇控制器，支持自定义温控曲线、多种运行模式和 Web 管理界面。基于 IT8772 芯片，安全可靠。
 platform              = x86
 maintainer            = zhangcheng
