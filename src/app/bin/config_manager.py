@@ -286,7 +286,7 @@ class ConfigManager:
     def __init__(self, config_dir: str, available_pwm: list[str] | None = None):
         self._config_path = os.path.join(config_dir, "config.json")
         self._available_pwm = available_pwm
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # 可重入锁，允许 update 中持锁调用 save
         self._config: dict = copy.deepcopy(DEFAULT_CONFIG)
 
     def load(self) -> dict:
@@ -337,9 +337,8 @@ class ConfigManager:
         with self._lock:
             merged = {**self._config, **partial}
             self._config = validate_config(merged, self._available_pwm)
-
-        self.save()
-        return self.get()
+            self.save()
+            return copy.deepcopy(self._config)
 
     def update_zone(self, zone_id: str, partial: dict) -> dict | None:
         """更新指定区域的配置
@@ -378,6 +377,7 @@ class ConfigManager:
             # 写回配置
             if "zones" not in self._config:
                 # 首次从 v1 升级到 v2
+                logger.info("配置格式从 v1 升级到 v2（zones）")
                 self._config = {
                     "poll_interval": self._config.get("poll_interval", 2),
                     "web_port": self._config.get("web_port", 9511),
@@ -386,5 +386,5 @@ class ConfigManager:
             else:
                 self._config["zones"] = zones
 
-        self.save()
-        return copy.deepcopy(validated)
+            self.save()
+            return copy.deepcopy(validated)

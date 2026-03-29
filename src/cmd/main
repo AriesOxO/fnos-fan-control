@@ -51,7 +51,10 @@ start_watchdog() {
         while kill -0 "$app_pid" 2>/dev/null; do
             sleep 5
         done
-        # 进程意外退出，恢复安全状态
+        # 进程退出（正常或异常），恢复安全状态
+        # 注意：正常停止时 stop_process 会先杀看门狗再停进程，
+        # 但存在无害竞态——看门狗可能先检测到进程退出后被杀。
+        # 多恢复一次不影响安全性。
         log_msg "看门狗检测到进程 $app_pid 退出，恢复安全状态"
         restore_safe_state
     ) &

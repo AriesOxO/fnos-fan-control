@@ -333,8 +333,8 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
 
   <!-- 高级设置 -->
   <div class="section">
-    <div class="section-title collapsible" onclick="toggleCollapse(this)"><span class="s-icon">🔧</span> 高级设置 <span class="collapse-arrow">▶</span></div>
-    <div class="collapse-body">
+    <div class="section-title collapsible" data-target="settingsBody" onclick="toggleCollapse(this)"><span class="s-icon">🔧</span> 高级设置 <span class="collapse-arrow">▶</span></div>
+    <div class="collapse-body" id="settingsBody">
       <div class="setting-row">
         <label>轮询间隔</label>
         <input type="number" id="pollInterval" min="1" max="30" value="2"> <span class="hint">秒 (1-30)</span>
@@ -361,18 +361,18 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
   <!-- 日志（默认折叠，点击展开） -->
   <div class="section">
     <div class="log-header">
-      <div class="section-title collapsible" onclick="toggleCollapse(this)" style="margin-bottom:0"><span class="s-icon">📋</span> 运行日志 <span class="collapse-arrow">▶</span></div>
+      <div class="section-title collapsible" data-target="logCollapseBody" onclick="toggleCollapse(this)" style="margin-bottom:0"><span class="s-icon">📋</span> 运行日志 <span class="collapse-arrow">▶</span></div>
       <button class="btn btn-danger" onclick="clearLogs()">清空</button>
     </div>
-    <div class="collapse-body">
+    <div class="collapse-body" id="logCollapseBody">
       <div class="log-list" id="logBody"><div class="log-empty">暂无日志</div></div>
     </div>
   </div>
 
   <!-- 使用说明 -->
   <div class="section">
-    <div class="section-title collapsible" onclick="toggleCollapse(this)"><span class="s-icon">📖</span> 使用说明 <span class="collapse-arrow">▶</span></div>
-    <div class="collapse-body">
+    <div class="section-title collapsible" data-target="guideBody" onclick="toggleCollapse(this)"><span class="s-icon">📖</span> 使用说明 <span class="collapse-arrow">▶</span></div>
+    <div class="collapse-body" id="guideBody">
       <div class="guide">
         <div class="guide-section">
           <h3>运行模式</h3>
@@ -709,13 +709,22 @@ function resetSettings(){document.getElementById('pollInterval').value=2;documen
 function loadConfig(cfg){
   config=cfg;
   document.getElementById('pollInterval').value=cfg.poll_interval||2;
-  // v1 扁平格式的字段
-  if(cfg.min_pwm_percent!=null)document.getElementById('minPwm').value=cfg.min_pwm_percent;
-  const src=cfg.temp_source||'cpu';const radio=document.querySelector('input[name=tempSource][value='+src+']');if(radio)radio.checked=true;
-  document.getElementById('manualSlider').value=cfg.manual_pwm_percent||50;
-  document.getElementById('manualSlider').min=Math.max(10,cfg.min_pwm_percent||10);
-  document.getElementById('manualVal').textContent=(cfg.manual_pwm_percent||50)+'%';
-  if(cfg.curve)curveData=JSON.parse(JSON.stringify(cfg.curve));renderCurveInputs();updateCurveSummary();
+
+  // 适配 v1 扁平格式和 v2 zones 格式
+  var zone=null;
+  if(cfg.zones&&cfg.zones.length>0){zone=cfg.zones[0]}
+
+  var minPwm=zone?zone.min_pwm_percent:cfg.min_pwm_percent;
+  var tempSrc=zone?zone.temp_source:cfg.temp_source;
+  var manualPwm=zone?zone.manual_pwm_percent:cfg.manual_pwm_percent;
+  var curveVal=zone?zone.curve:cfg.curve;
+
+  document.getElementById('minPwm').value=minPwm||20;
+  var src=tempSrc||'cpu';var radio=document.querySelector('input[name=tempSource][value='+src+']');if(radio)radio.checked=true;
+  document.getElementById('manualSlider').value=manualPwm||50;
+  document.getElementById('manualSlider').min=Math.max(10,minPwm||10);
+  document.getElementById('manualVal').textContent=(manualPwm||50)+'%';
+  if(curveVal)curveData=JSON.parse(JSON.stringify(curveVal));renderCurveInputs();updateCurveSummary();
 }
 
 function updateAlerts(s){
@@ -752,16 +761,12 @@ async function clearLogs(){
 
 function toggleCollapse(el){
   el.classList.toggle('open');
-  let body=el.nextElementSibling;
-  if(!body||!body.classList.contains('collapse-body')){
-    body=el.parentElement.nextElementSibling;
-  }
-  if(body&&body.classList.contains('collapse-body')){
-    body.classList.toggle('open');
-  }
-  if(el.classList.contains('open')&&el.closest('.log-header')){
-    fetchLogs();
-  }
+  var targetId=el.getAttribute('data-target');
+  var body=targetId?document.getElementById(targetId):null;
+  if(!body){body=el.nextElementSibling}
+  if(!body||!body.classList.contains('collapse-body')){body=el.parentElement.nextElementSibling}
+  if(body&&body.classList.contains('collapse-body')){body.classList.toggle('open')}
+  if(el.classList.contains('open')&&el.closest('.log-header')){fetchLogs()}
 }
 
 async function fetchLogs(){

@@ -417,13 +417,13 @@ class Hardware:
     def restore_safe_state(self):
         """恢复所有 PWM 通道为安全状态 (pwm_enable=2)
 
-        通用逻辑：遍历所有 hwmon 设备，对每个可写的 pwm*_enable
-        写入 2（芯片自动控制或全速，均安全）。
+        注意：此方法不复用 self.chips，而是直接扫描 /sys/class/hwmon。
+        这是有意设计——确保恢复所有可写的 pwm_enable，包括未纳管的通道
+        和探测后新增的设备，是最安全的兜底策略。
 
         在以下时机调用：
         - 启动前（清除上次崩溃残留）
         - 正常退出时
-        - 异常降级时
         - 卸载时
         """
         hwmon_dirs = sorted(glob.glob(os.path.join(self.HWMON_BASE, "hwmon*")))
