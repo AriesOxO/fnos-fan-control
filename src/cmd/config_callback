@@ -1,4 +1,13 @@
 #!/bin/bash
-# 配置变更后执行
+# 配置变更后执行：通知主进程重载配置
+
+PID_FILE="${TRIM_PKGVAR}/app.pid"
+
+if [ -f "$PID_FILE" ]; then
+    pid=$(head -n 1 "$PID_FILE" | tr -d '[:space:]')
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill -HUP "$pid" 2>/dev/null
+    fi
+fi
 
 exit 0

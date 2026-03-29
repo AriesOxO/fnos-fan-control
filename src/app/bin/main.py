@@ -55,6 +55,7 @@ def main():
     app_dest = os.environ.get("TRIM_APPDEST", os.path.dirname(__file__))
     config_dir = os.environ.get("TRIM_PKGETC", "/tmp/fan-control-etc")
     port = int(os.environ.get("TRIM_SERVICE_PORT") or "9511")
+    # 默认 0.0.0.0 允许局域网访问；如需限制仅本机访问可设 FAN_CONTROL_BIND=127.0.0.1
     bind_address = os.environ.get("FAN_CONTROL_BIND", "0.0.0.0")
 
     # ── 1. 硬件探测 ──
@@ -76,6 +77,7 @@ def main():
 
     # ── 5. 注册退出处理 ──
     cleanup_done = False
+    server = None
 
     def cleanup():
         nonlocal cleanup_done
@@ -87,11 +89,19 @@ def main():
 
     def signal_handler(signum, frame):
         logger.info("收到信号 %d，准备退出", signum)
-        cleanup()
-        sys.exit(0)
+        # 不在信号处理器中调用 sys.exit（避免锁未释放风险）
+        # 通过 shutdown 让 serve_forever 正常返回
+        if server:
+            server.shutdown()
+
+    def reload_handler(signum, frame):
+        logger.info("收到 SIGHUP，重新加载配置")
+        cm.load()
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, reload_handler)
     atexit.register(cleanup)
 
     # ── 6. 设置 OOM 保护 ──

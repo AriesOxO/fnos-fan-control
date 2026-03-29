@@ -167,6 +167,31 @@ class TestFanControllerSafety(unittest.TestCase):
         fc.stop()
 
 
+    def test_temp_failure_full_speed_all_zones(self):
+        """温度连续读取失败时所有区域全速保护"""
+        # 使用 1 秒轮询加速测试
+        self.cm.update({"poll_interval": 1})
+        fc = FanController(self.hw, self.cm)
+        fc.start()
+        time.sleep(0.5)
+        fc.set_mode("auto")
+        time.sleep(0.5)
+        # 模拟温度读取持续失败
+        self.hw._mock_temp = None
+        self.hw._read_fail_count = 0
+        time.sleep(5)  # 等待足够多的控制周期（>=3次失败）
+        # 应该全速保护
+        self.assertEqual(self.hw._mock_pwm, 255)
+        fc.stop()
+
+    def test_interpolate_zero_division_safe(self):
+        """温度节点相同时不除零"""
+        from fan_controller import FanController as FC
+        curve = [{"temp": 50, "pwm_percent": 50}, {"temp": 50, "pwm_percent": 80}]
+        result = FC._interpolate_curve(50, curve)
+        self.assertEqual(result, int(255 * 50 / 100))
+
+
 class TestFanControllerLogs(unittest.TestCase):
     """事件日志测试"""
 

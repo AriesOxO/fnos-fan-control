@@ -85,6 +85,7 @@ class Hardware:
         # 温度传感器路径
         self.cpu_temp_base: str | None = None     # CPU 温度 hwmon 路径
         self.cpu_temp_driver: str | None = None    # CPU 温度驱动名
+        self.cpu_temp_file: str | None = None      # 最佳 CPU 温度文件（Package/Tdie）
         self.drivetemp_paths: dict[str, str] = {}  # {"sda": "/sys/.../temp1_input"}
 
         # 汇总所有芯片的通道（方便外部访问）
@@ -113,6 +114,7 @@ class Hardware:
         self.chips = []
         self.cpu_temp_base = None
         self.cpu_temp_driver = None
+        self.cpu_temp_file = None
         self.drivetemp_paths = {}
         self.available_pwm = []
         self.available_fans = {}
@@ -127,13 +129,14 @@ class Hardware:
 
             # CPU 温度传感器探测（支持 Intel coretemp、AMD k10temp 等）
             if name in CPU_TEMP_DRIVERS:
-                # 优先级：按 CPU_TEMP_DRIVERS 列表顺序，已有则跳过低优先级
                 if self.cpu_temp_base is None:
-                    temp_file = os.path.join(hwmon_dir, "temp1_input")
-                    if os.path.exists(temp_file):
+                    best_file = self._find_best_temp_file(hwmon_dir, name)
+                    if best_file:
                         self.cpu_temp_base = hwmon_dir
                         self.cpu_temp_driver = name
-                        logger.info("探测到 CPU 温度传感器: %s (%s)", name, hwmon_dir)
+                        self.cpu_temp_file = best_file
+                        logger.info("探测到 CPU 温度: %s (%s) → %s",
+                                    name, hwmon_dir, os.path.basename(best_file))
                 continue
 
             if name == "drivetemp":
@@ -215,6 +218,38 @@ class Hardware:
 
             self.available_pwm.extend(mapped_channels)
             self.available_fans.update(mapped_fans)
+
+    def _find_best_temp_file(self, hwmon_dir: str, driver: str) -> str | None:
+        """选择最佳 CPU 温度文件
+
+        Intel coretemp: 优先 "Package id 0" label 对应的 temp 文件
+        AMD k10temp: 优先 "Tdie" label（实际温度），回退 "Tctl"（可能有偏移）
+        通用: 回退 temp1_input
+        """
+        # 优先匹配的 label 关键词（按优先级）
+        preferred_labels = {
+            "coretemp": ["Package id"],
+            "k10temp": ["Tdie", "Tccd1", "Tctl"],
+            "zenpower": ["Tdie", "SVI2_P_Core"],
+        }
+        labels_to_find = preferred_labels.get(driver, [])
+
+        # 扫描所有 temp*_label 文件
+        for label_keyword in labels_to_find:
+            for i in range(1, 20):
+                label_file = os.path.join(hwmon_dir, f"temp{i}_label")
+                label = self._read_file(label_file)
+                if label and label_keyword in label:
+                    input_file = os.path.join(hwmon_dir, f"temp{i}_input")
+                    if os.path.exists(input_file):
+                        logger.info("  匹配 label '%s' → temp%d_input", label, i)
+                        return input_file
+
+        # 回退 temp1_input
+        fallback = os.path.join(hwmon_dir, "temp1_input")
+        if os.path.exists(fallback):
+            return fallback
+        return None
 
     def _detect_pwm_channels(self, hwmon_dir: str) -> tuple[list[str], dict[str, str]]:
         """扫描 hwmon 目录下可用的 PWM 和风扇通道
@@ -299,10 +334,10 @@ class Hardware:
             摄氏度浮点数，异常时返回上次有效值，
             传感器路径不存在返回 None
         """
-        if self.cpu_temp_base is None:
+        if self.cpu_temp_file is None:
             return None
 
-        temp_file = os.path.join(self.cpu_temp_base, "temp1_input")
+        temp_file = self.cpu_temp_file
         raw = self._read_int_file(temp_file)
 
         if raw is None:

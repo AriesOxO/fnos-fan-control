@@ -149,7 +149,7 @@ class TestHardwareDetection(unittest.TestCase):
         self.assertEqual(temp, 60.0)
 
     def test_read_fail_count(self):
-        self.hw.cpu_temp_base = "/nonexistent"
+        self.hw.cpu_temp_file = "/nonexistent/temp1_input"
         self.hw._last_valid_temp = 50.0
         for i in range(1, 4):
             self.hw.read_cpu_temp()
@@ -268,10 +268,11 @@ class TestHardwareDetection(unittest.TestCase):
         self.assertEqual(self.hw.read_cpu_temp(), 50.0)
 
     def test_no_cpu_temp_sensor(self):
-        """无 CPU 温度传感器时 cpu_temp_base 为 None"""
+        """无 CPU 温度传感器时返回 None"""
         self._create_hwmon("it8772", 0, {"pwm1": "128", "fan1_input": "2000"})
         self.hw.detect_hwmon_paths()
         self.assertIsNone(self.hw.cpu_temp_base)
+        self.assertIsNone(self.hw.cpu_temp_file)
         self.assertIsNone(self.hw.read_cpu_temp())
 
     def test_cpu_temp_driver_in_info(self):
@@ -281,6 +282,47 @@ class TestHardwareDetection(unittest.TestCase):
         self.hw.detect_hwmon_paths()
         info = self.hw.get_hardware_info()
         self.assertEqual(info["temp_sensors"]["cpu"]["type"], "k10temp")
+
+    # ── CPU 温度 label 匹配测试 ──
+
+    def test_coretemp_package_label(self):
+        """Intel coretemp 匹配 Package id 0 label"""
+        self._create_hwmon("coretemp", 0, {
+            "temp1_input": "45000", "temp1_label": "Core 0",
+            "temp2_input": "47000", "temp2_label": "Core 1",
+            "temp3_input": "50000", "temp3_label": "Package id 0",
+        })
+        self._create_hwmon("it8772", 1, {"pwm1": "128", "fan1_input": "2000"})
+        self.hw.detect_hwmon_paths()
+        # 应该选择 Package id 0 对应的 temp3
+        self.assertEqual(self.hw.read_cpu_temp(), 50.0)
+
+    def test_k10temp_tdie_label(self):
+        """AMD k10temp 优先匹配 Tdie"""
+        self._create_hwmon("k10temp", 0, {
+            "temp1_input": "70000", "temp1_label": "Tctl",
+            "temp2_input": "60000", "temp2_label": "Tdie",
+        })
+        self._create_hwmon("it8772", 1, {"pwm1": "128", "fan1_input": "2000"})
+        self.hw.detect_hwmon_paths()
+        # 应该选择 Tdie 而非 Tctl
+        self.assertEqual(self.hw.read_cpu_temp(), 60.0)
+
+    def test_k10temp_fallback_tctl(self):
+        """AMD k10temp 无 Tdie 时回退 Tctl"""
+        self._create_hwmon("k10temp", 0, {
+            "temp1_input": "65000", "temp1_label": "Tctl",
+        })
+        self._create_hwmon("it8772", 1, {"pwm1": "128", "fan1_input": "2000"})
+        self.hw.detect_hwmon_paths()
+        self.assertEqual(self.hw.read_cpu_temp(), 65.0)
+
+    def test_no_label_fallback_temp1(self):
+        """无 label 文件时回退 temp1_input"""
+        self._create_hwmon("coretemp", 0, {"temp1_input": "48000"})
+        self._create_hwmon("it8772", 1, {"pwm1": "128", "fan1_input": "2000"})
+        self.hw.detect_hwmon_paths()
+        self.assertEqual(self.hw.read_cpu_temp(), 48.0)
 
     # ── 多芯片通道冲突测试 ──
 
