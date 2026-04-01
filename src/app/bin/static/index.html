@@ -430,8 +430,10 @@ input[type=range]::-webkit-slider-thumb:hover{box-shadow:0 0 14px rgba(0,180,216
           </ul>
           <div class="guide-code">bash /tmp/cleanup-fan-control.sh</div>
           <ul style="margin-top:8px">
-            <li>清理脚本已随应用安装到 /tmp 目录，卸载后仍可用。</li>
+            <li>清理脚本随应用安装自动释放到 /tmp 目录，卸载后仍可用。</li>
+            <li>如果服务器重启过导致脚本丢失，可手动执行以下命令：</li>
           </ul>
+          <div class="guide-code">userdel fan-control 2>/dev/null<br>groupdel fan-control 2>/dev/null<br>for vol in $(ls -d /vol* 2>/dev/null); do<br>&nbsp;&nbsp;for dir in @appconf @appdata @apphome @appmeta @apptemp @appcenter; do<br>&nbsp;&nbsp;&nbsp;&nbsp;rm -rf "$vol/$dir/fan-control"<br>&nbsp;&nbsp;done<br>done<br>rm -rf /var/apps/fan-control</div>
         </div>
       </div>
     </div>

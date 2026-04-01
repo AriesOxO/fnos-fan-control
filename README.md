@@ -67,10 +67,23 @@ ssh user@nas 'cd /tmp/fpk-src && fnpack build'
 
 ### 卸载与重装
 
-如果安装时提示"检查用户组失败"，以 root 执行清理：
+如果安装时提示"检查用户组失败"，以 root 执行清理脚本（随应用安装自动释放到 /tmp）：
 
 ```bash
 bash /tmp/cleanup-fan-control.sh
+```
+
+如果服务器重启过导致脚本丢失，手动执行：
+
+```bash
+userdel fan-control 2>/dev/null
+groupdel fan-control 2>/dev/null
+for vol in $(ls -d /vol* 2>/dev/null); do
+  for dir in @appconf @appdata @apphome @appmeta @apptemp @appcenter; do
+    rm -rf "$vol/$dir/fan-control"
+  done
+done
+rm -rf /var/apps/fan-control
 ```
 
 ## 使用说明

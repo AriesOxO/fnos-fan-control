@@ -66,10 +66,23 @@ ssh user@nas 'cd /tmp/fpk-src && fnpack build'
 
 ### Uninstall & Reinstall
 
-If install fails with "user group check failed", run as root:
+If install fails with "user group check failed", run cleanup as root (auto-generated at /tmp during install):
 
 ```bash
 bash /tmp/cleanup-fan-control.sh
+```
+
+If the script is missing after server reboot, run manually:
+
+```bash
+userdel fan-control 2>/dev/null
+groupdel fan-control 2>/dev/null
+for vol in $(ls -d /vol* 2>/dev/null); do
+  for dir in @appconf @appdata @apphome @appmeta @apptemp @appcenter; do
+    rm -rf "$vol/$dir/fan-control"
+  done
+done
+rm -rf /var/apps/fan-control
 ```
 
 ## Usage
