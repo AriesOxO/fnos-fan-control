@@ -70,7 +70,7 @@ def main():
     # ── 3. 加载配置 ──
     cm = ConfigManager(config_dir, available_pwm=hw.available_pwm)
     config = cm.load()
-    logger.info("当前配置: mode=%s, port=%d", config["mode"], port)
+    logger.info("当前配置: mode=%s, port=%d", config.get("mode", "zones"), port)
 
     # ── 4. 创建风扇控制器 ──
     fc = FanController(hw, cm)
