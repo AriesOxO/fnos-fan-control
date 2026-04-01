@@ -3,10 +3,6 @@
         "stepTitle": "访问配置",
         "items": [
             {
-                "type": "tips",
-                "helpText": "📌 如需反向代理访问，请先配置好反代再修改"
-            },
-            {
                 "type": "text",
                 "field": "port",
                 "label": "访问端口",
@@ -14,18 +10,6 @@
                     {
                         "required": true,
                         "message": "端口号不能为空"
-                    }
-                ]
-            },
-            {
-                "type": "text",
-                "field": "path",
-                "label": "访问路径",
-                "initValue": "/",
-                "rules": [
-                    {
-                        "required": true,
-                        "message": "访问路径不能为空"
                     }
                 ]
             },
